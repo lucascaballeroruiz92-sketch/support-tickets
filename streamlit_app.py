@@ -10,7 +10,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- BASE DE DATOS DE CLIENTES ---
+# --- BASE DE DATOS DE CLIENTES DINÁMICA ---
 if "clientes" not in st.session_state:
   st.session_state.clientes = [
       "Mueblería Castillo de Oro",
@@ -20,6 +20,9 @@ if "clientes" not in st.session_state:
 # --- CONTROL DE SESIÓN ---
 if "autenticado" not in st.session_state:
   st.session_state["autenticado"] = False
+
+if "empresa_actual" not in st.session_state:
+  st.session_state["empresa_actual"] = st.session_state.clientes[0]
 
 # --- BARRA LATERAL (SIDEBAR) PARA LOGIN Y NAVEGACIÓN ---
 st.sidebar.image(
@@ -31,8 +34,12 @@ st.sidebar.markdown("---")
 if not st.session_state["autenticado"]:
   st.sidebar.subheader("🔒 Acceso al Sistema")
   cliente_seleccionado = st.sidebar.selectbox(
-      "Seleccionar Empresa:", st.session_state.clientes
+      "Seleccionar Empresa / Cliente:",
+      st.session_state.clientes,
+      key="select_login_empresa",
   )
+  st.session_state["empresa_actual"] = cliente_seleccionado
+
   usuario = st.sidebar.text_input("Usuario", key="user_login")
   password = st.sidebar.text_input("Contraseña", type="password", key="pass_login")
 
@@ -40,17 +47,26 @@ if not st.session_state["autenticado"]:
     if usuario and password:
       st.session_state["autenticado"] = True
       st.session_state["usuario_actual"] = usuario
-      st.session_state["empresa_actual"] = cliente_seleccionado
       st.rerun()
     else:
-      st.sidebar.error("Completa los datos.")
+      st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
 # --- SI ESTÁ AUTENTICADO: MENÚ LATERAL Y PANEL PRINCIPAL ---
 st.sidebar.success(f"Usuario: {st.session_state.get('usuario_actual')}")
-st.sidebar.markdown(f"**Empresa:** {st.session_state.get('empresa_actual')}")
-st.sidebar.markdown("---")
 
+# Selector activo para cambiar de cliente en cualquier momento
+cliente_activo = st.sidebar.selectbox(
+    "Empresa Activa:",
+    st.session_state.clientes,
+    index=st.session_state.clientes.index(
+        st.session_state.get("empresa_actual")
+    ),
+    key="select_menu_empresa",
+)
+st.session_state["empresa_actual"] = cliente_activo
+
+st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Menú de Tareas")
 opcion_menu = st.sidebar.radio(
     "Seleccione una opción:",
@@ -61,16 +77,19 @@ opcion_menu = st.sidebar.radio(
     ],
 )
 
+st.sidebar.markdown("---")
 if st.sidebar.button("🚪 Cerrar Sesión"):
   st.session_state["autenticado"] = False
   st.rerun()
 
 # --- CONTENIDO PRINCIPAL SEGÚN LA OPCIÓN DEL MENÚ LATERAL ---
 if opcion_menu == "Carga y Conciliación de Archivos":
-  st.markdown("## 📊 Carga de Comprobantes y Liquidaciones")
+  st.markdown(
+      f"## 📊 Carga de Comprobantes y Liquidaciones - [{st.session_state.get('empresa_actual')}]"
+  )
   st.write(
       "Sube los archivos de AFIP (ARCA), Naranja X, Nación Pagos, Mercado"
-      " Pago y Payway para procesar comisiones, IVA y SIRTAC."
+      " Pago y Payway para procesar comisiones, IVA y tasas."
   )
   st.markdown("---")
 
@@ -93,22 +112,34 @@ if opcion_menu == "Carga y Conciliación de Archivos":
 
 elif opcion_menu == "Gestión Multitenant (Admin)":
   st.markdown("## 🏢 Gestión Multitenant")
-  st.write(
-      "Administra las empresas y clientes integrados en la plataforma."
-  )
+  st.write("Administra las empresas y clientes integrados en la plataforma.")
   st.markdown("---")
+
+  st.write(
+      "**Clientes registrados actualmente:**",
+      ", ".join(st.session_state.clientes),
+  )
+
   nuevo_cliente = st.text_input("Agregar Nuevo Cliente / Empresa")
   if st.button("Registrar Cliente"):
-    if nuevo_cliente:
+    if nuevo_cliente and nuevo_cliente not in st.session_state.clientes:
       st.session_state.clientes.append(nuevo_cliente)
-      st.success(f"¡Cliente '{nuevo_cliente}' agregado con éxito!")
+      st.success(
+          f"¡Cliente '{nuevo_cliente}' agregado con éxito y disponible en el"
+          " selector!"
+      )
+      st.rerun()
+    elif nuevo_cliente in st.session_state.clientes:
+      st.warning("Ese cliente ya se encuentra registrado.")
+    else:
+      st.error("Ingresa un nombre válido.")
 
 elif opcion_menu == "📄 Informe para el Contador (PDF Seguro)":
   st.markdown("## 📄 Generación de Reporte Oficial para el Contador")
   st.write(
-      "Obtén el reporte consolidado en formato seguro (PDF/HTML protegido)"
-      " con desglose detallado de comisiones, IVA por uso de plataforma y"
-      " retenciones."
+      f"Obtén el reporte consolidado para **{st.session_state.get('empresa_actual')}**"
+      " en formato seguro (PDF/HTML protegido) con desglose detallado de"
+      " comisiones, IVA por uso de plataforma y retenciones."
   )
   st.markdown("---")
 
