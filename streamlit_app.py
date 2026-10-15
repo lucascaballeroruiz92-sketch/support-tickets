@@ -33,6 +33,7 @@ if not st.session_state["autenticado"]:
   st.sidebar.title("Sistema de Conciliación")
   st.sidebar.markdown("---")
   st.sidebar.subheader("🔒 Acceso al Sistema")
+
   cliente_seleccionado = st.sidebar.selectbox(
       "Seleccionar Empresa / Cliente:",
       st.session_state.clientes,
@@ -50,10 +51,29 @@ if not st.session_state["autenticado"]:
       st.rerun()
     else:
       st.sidebar.error("Por favor completa los datos de acceso.")
+
+  st.sidebar.markdown("---")
+  st.sidebar.subheader("➕ ¿Nuevo Cliente?")
+  nuevo_cliente_login = st.sidebar.text_input(
+      "Nombre de la nueva empresa", key="nuevo_cli_login"
+  )
+  if st.sidebar.button("Registrar Nueva Empresa"):
+    if (
+        nuevo_cliente_login
+        and nuevo_cliente_login not in st.session_state.clientes
+    ):
+      st.session_state.clientes.append(nuevo_cliente_login)
+      st.session_state["empresa_actual"] = nuevo_cliente_login
+      st.sidebar.success(f"¡Empresa '{nuevo_cliente_login}' creada con éxito!")
+      st.rerun()
+    elif nuevo_cliente_login in st.session_state.clientes:
+      st.sidebar.warning("Esa empresa ya existe.")
+    else:
+      st.sidebar.error("Ingresa un nombre válido.")
+
   st.stop()
 
 # --- SI ESTÁ AUTENTICADO: MENÚ LATERAL DINÁMICO ---
-# El título principal ahora muestra dinámicamente la empresa seleccionada
 st.sidebar.title(f"{st.session_state.get('empresa_actual')}")
 st.sidebar.markdown("---")
 st.sidebar.success(f"Usuario: {st.session_state.get('usuario_actual')}")
@@ -91,7 +111,8 @@ if st.sidebar.button("🚪 Cerrar Sesión"):
 # --- CONTENIDO PRINCIPAL SEGÚN LA OPCIÓN DEL MENÚ LATERAL ---
 if opcion_menu == "📂 Carga Única de Liquidaciones":
   st.markdown(
-      f"## 📂 Carga General de Comprobantes - [{st.session_state.get('empresa_actual')}]"
+      f"## 📂 Carga General de Comprobantes -"
+      f" [{st.session_state.get('empresa_actual')}]"
   )
   st.write(
       "Sube **todos** tus archivos y comprobantes juntos (Mercado Pago, Naranja"
@@ -100,7 +121,6 @@ if opcion_menu == "📂 Carga Única de Liquidaciones":
   )
   st.markdown("---")
 
-  # CARPETA ÚNICA DE CARGA MÚLTIPLE
   archivos_subidos = st.file_uploader(
       "Arrastra o selecciona todos los archivos de liquidación aquí:",
       type=["csv", "xlsx", "pdf"],
@@ -129,21 +149,34 @@ if opcion_menu == "📂 Carga Única de Liquidaciones":
 
 elif opcion_menu == "Gestión Multitenant (Admin)":
   st.markdown("## 🏢 Gestión Multitenant")
-  st.write("Administra las empresas y clientes integrados en la plataforma.")
+  st.write(
+      "Administra, agrega o elimina las empresas y clientes integrados en la"
+      " plataforma."
+  )
   st.markdown("---")
 
-  st.write(
-      "**Clientes registrados actualmente:**",
-      ", ".join(st.session_state.clientes),
-  )
+  st.write("**Clientes registrados actualmente:**")
+  for cli in st.session_state.clientes:
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+      st.text(f"• {cli}")
+    with col_b:
+      if len(st.session_state.clientes) > 1:
+        if st.button(f"🗑️ Borrar", key=f"del_{cli}"):
+          st.session_state.clientes.remove(cli)
+          st.session_state["empresa_actual"] = st.session_state.clientes[0]
+          st.success(f"Cliente '{cli}' eliminado correctamente.")
+          st.rerun()
 
-  nuevo_cliente = st.text_input("Agregar Nuevo Cliente / Empresa")
+  st.markdown("---")
+  st.subheader("➕ Agregar Nuevo Cliente")
+  nuevo_cliente = st.text_input("Nombre de la nueva empresa o cliente")
   if st.button("Registrar Cliente"):
     if nuevo_cliente and nuevo_cliente not in st.session_state.clientes:
       st.session_state.clientes.append(nuevo_cliente)
+      st.session_state["empresa_actual"] = nuevo_cliente
       st.success(
-          f"¡Cliente '{nuevo_cliente}' agregado con éxito y disponible en el"
-          " selector!"
+          f"¡Cliente '{nuevo_cliente}' agregado con éxito y seleccionado!"
       )
       st.rerun()
     elif nuevo_cliente in st.session_state.clientes:
