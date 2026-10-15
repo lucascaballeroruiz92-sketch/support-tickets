@@ -5,11 +5,9 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_config={
-        "page_title": "Sistema de Conciliación & Automatización Contable",
-        "page_icon": "💼",
-        "layout": "wide",
-    }
+    page_title="Sistema de Conciliación & Automatización Contable",
+    page_icon="💼",
+    layout="wide",
 )
 
 # --- BASE DE DATOS DE CLIENTES ---
@@ -20,9 +18,7 @@ if "clientes" not in st.session_state:
   ]
 
 # --- SIMULACIÓN DE LOGIN ---
-st.markdown(
-    "## 💼 Sistema de Automatización y Conciliación Contable"
-)
+st.markdown("## 💼 Sistema de Automatización y Conciliación Contable")
 st.markdown("### Acceso Multicliente (Administradores y Colaboradores)")
 
 cliente_seleccionado = st.selectbox(
@@ -31,9 +27,7 @@ cliente_seleccionado = st.selectbox(
 usuario = st.text_input(
     "Usuario (ej. colaborador1, colaborador2, admin)", key="user_login"
 )
-password = st.text_input(
-    "Contraseña", type="password", key="pass_login"
-)
+password = st.text_input("Contraseña", type="password", key="pass_login")
 
 if st.button("Ingresar al Sistema"):
   if usuario and password:
@@ -48,7 +42,8 @@ if st.button("Ingresar al Sistema"):
 if st.session_state.get("autenticado", False):
   st.markdown("---")
   st.markdown(
-      f"### Panel de Control - Empresa: **{st.session_state.get('empresa_actual')}**"
+      f"### Panel de Control - Empresa:"
+      f" **{st.session_state.get('empresa_actual')}**"
   )
 
   tab1, tab2, tab3 = st.tabs(
@@ -74,9 +69,7 @@ if st.session_state.get("autenticado", False):
       st.file_uploader(
           "Liquidación Nación Pagos", type=["csv", "xlsx"], key="nacion"
       )
-      st.file_uploader(
-          "Comprobantes AFIP / ARCA", type=["pdf", "csv"], key="afip"
-      )
+      st.file_uploader("Comprobantes AFIP / ARCA", type=["pdf", "csv"], key="afip")
 
     if st.button("Procesar y Conciliar Automáticamente"):
       st.success("¡Datos procesados y conciliados correctamente!")
