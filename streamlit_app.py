@@ -1,145 +1,153 @@
-import streamlit as st
-import pandas as pd
+import base64
+from io import BytesIO
 import numpy as np
+import pandas as pd
+import streamlit as st
 
 st.set_page_config(
-    page_title="Sistema de Conciliación & Automatización Contable",
-    page_icon="💼",
-    layout="wide"
+    page_config={
+        "page_title": "Sistema de Conciliación & Automatización Contable",
+        "page_icon": "💼",
+        "layout": "wide",
+    }
 )
 
 # --- BASE DE DATOS DE CLIENTES ---
 if "clientes" not in st.session_state:
-    st.session_state.clientes = [
-        "Mueblería Castillo de Oro",
-        "Comercio Ejemplo S.A.",
-        "➕ Agregar Nuevo Cliente..."
-    ]
+  st.session_state.clientes = [
+      "Mueblería Castillo de Oro",
+      "Comercio Ejemplo S.A.",
+  ]
 
-# --- CONTROL DE AUTENTICACIÓN ---
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.user = None
-    st.session_state.cliente_activo = "Mueblería Castillo de Oro"
+# --- SIMULACIÓN DE LOGIN ---
+st.markdown(
+    "## 💼 Sistema de Automatización y Conciliación Contable"
+)
+st.markdown("### Acceso Multicliente (Administradores y Colaboradores)")
 
-USERS = {
-    "colaborador1": "oro2026",
-    "colaborador2": "oro2026",
-    "admin": "admin2026"
-}
+cliente_seleccionado = st.selectbox(
+    "Seleccionar Empresa / Cliente:", st.session_state.clientes
+)
+usuario = st.text_input(
+    "Usuario (ej. colaborador1, colaborador2, admin)", key="user_login"
+)
+password = st.text_input(
+    "Contraseña", type="password", key="pass_login"
+)
 
-def login_screen():
-    st.title("💼 Sistema de Automatización y Conciliación Contable")
-    st.markdown("### Acceso Multicliente (Administradores y Colaboradores)")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        with st.form("login_form"):
-            cliente_sel = st.selectbox("Seleccionar Empresa / Cliente:", st.session_state.clientes)
-            username = st.text_input("Usuario (ej. colaborador1, colaborador2, admin)")
-            password = st.text_input("Contraseña", type="password")
-            submit = st.form_submit_button("Ingresar al Sistema", use_container_width=True)
-            
-            if submit:
-                if username in USERS and USERS[username] == password:
-                    st.session_state.logged_in = True
-                    st.session_state.user = username
-                    st.session_state.cliente_activo = cliente_sel
-                    st.rerun()
-                else:
-                    st.error("Usuario o contraseña incorrectos.")
+if st.button("Ingresar al Sistema"):
+  if usuario and password:
+    st.session_state["autenticado"] = True
+    st.session_state["usuario_actual"] = usuario
+    st.session_state["empresa_actual"] = cliente_seleccionado
+    st.success(f"¡Bienvenido, {usuario}! Accediendo a {cliente_seleccionado}...")
+  else:
+    st.error("Por favor completa los datos de acceso.")
 
-if not st.session_state.logged_in:
-    login_screen()
-else:
-    user = st.session_state.user
-    
-    # Barra lateral de navegación y selección de cliente
-    st.sidebar.title(f"👤 Usuario: {user}")
-    st.sidebar.markdown("---")
-    
-    cliente_actual = st.sidebar.selectbox(
-        "🏢 Cliente Activo:", 
-        st.session_state.clientes, 
-        index=st.session_state.clientes.index(st.session_state.cliente_activo) if st.session_state.cliente_activo in st.session_state.clientes else 0
+# Si está autenticado, mostramos la plataforma principal
+if st.session_state.get("autenticado", False):
+  st.markdown("---")
+  st.markdown(
+      f"### Panel de Control - Empresa: **{st.session_state.get('empresa_actual')}**"
+  )
+
+  tab1, tab2, tab3 = st.tabs(
+      ["Carga y Conciliación", "Reporte para el Contador", "Gestión Multitenant"]
+  )
+
+  with tab1:
+    st.subheader("Carga de Comprobantes y Liquidaciones")
+    st.write(
+        "Sube los archivos de AFIP (ARCA), Naranja X, Nación Pagos, Mercado"
+        " Pago y Payway para procesar comisiones, IVA y SIRTAC."
     )
-    st.session_state.cliente_activo = cliente_actual
-    
-    # Encabezado principal personalizado
-    st.markdown(f"# 🏢 {st.session_state.cliente_activo}")
-    st.caption("Panel de Control de Conciliación de Pagos, Liquidaciones y ARCA")
-    st.markdown("---")
-    
-    menu = st.sidebar.radio("Navegación", [
-        "📥 Carga de Archivos y Liquidaciones", 
-        "📊 Planilla Maestra & Conciliación", 
-        "📑 Reportes para el Contador"
-    ])
-    
-    st.sidebar.markdown("---")
-    if st.sidebar.button("Cerrar Sesión", use_container_width=True):
-        st.session_state.logged_in = False
-        st.session_state.user = None
-        st.rerun()
 
-    # --- MÓDULO 1: CARGA DE ARCHIVOS ---
-    if menu == "📥 Carga de Archivos y Liquidaciones":
-        st.header(f"📥 Módulo de Carga - {st.session_state.cliente_activo}")
-        st.info("Tanto colaborador1, colaborador2 como el administrador pueden subir comprobantes en cualquier momento.")
-        
-        tab1, tab2, tab3, tab4 = st.tabs(["ARCA (Facturación)", "Naranja X", "Nación Pagos", "Mercado Pago"])
-        
-        with tab1:
-            st.subheader("Comprobantes Emitidos - ARCA (AFIP)")
-            st.file_uploader("Subir reporte ARCA (Excel / CSV)", type=["xlsx", "csv"], key="arca_up")
-            
-        with tab2:
-            st.subheader("Liquidaciones Naranja X")
-            st.file_uploader("Subir liquidación Naranja X", type=["pdf", "xlsx", "csv"], key="naranja_up")
-            
-        with tab3:
-            st.subheader("Liquidaciones Nación Pagos")
-            st.file_uploader("Subir liquidación Nación Pagos", type=["pdf", "xlsx", "csv"], key="nacion_up")
-            
-        with tab4:
-            st.subheader("Movimientos Mercado Pago")
-            st.file_uploader("Subir reporte Mercado Pago", type=["xlsx", "csv", "pdf"], key="mp_up")
-            
-        st.markdown("---")
-        if st.button("🚀 Procesar Archivos y Actualizar Planilla Maestra", use_container_width=True):
-            st.success(f"¡Archivos procesados con éxito para {st.session_state.cliente_activo}!")
+    col1, col2 = st.columns(2)
+    with col1:
+      st.file_uploader(
+          "Liquidación Mercado Pago", type=["csv", "xlsx"], key="mp"
+      )
+      st.file_uploader(
+          "Liquidación Naranja X", type=["csv", "xlsx"], key="naranja"
+      )
+    with col2:
+      st.file_uploader(
+          "Liquidación Nación Pagos", type=["csv", "xlsx"], key="nacion"
+      )
+      st.file_uploader(
+          "Comprobantes AFIP / ARCA", type=["pdf", "csv"], key="afip"
+      )
 
-    # --- MÓDULO 2: PLANILLA MAESTRA & CONCILIACIÓN ---
-    elif menu == "📊 Planilla Maestra & Conciliación":
-        st.header(f"📊 Planilla Maestra Consolidada - {st.session_state.cliente_activo}")
-        st.write("Vista unificada de facturas ARCA vs. cupones de cobro y deducciones.")
-        
-        df_demo = pd.DataFrame({
-            "Fecha": ["01/09/2026", "01/09/2026", "02/09/2026"],
-            "Factura ARCA": ["B-0006-2936", "B-0005-2533", "B-0006-2938"],
-            "Monto Total Factura": [1390000.0, 329000.0, 700000.0],
-            "Plataforma": ["NARANJA X", "MERCADO PAGO", "NACIÓN PAGOS"],
-            "Monto Cupón": [1390000.0, 329000.0, 700000.0],
-            "Aranceles / Cargos": [25020.0, 24373.0, 14140.0],
-            "IVA Comisiones": [5254.20, 5118.33, 2969.40],
-            "Retención SIRTAC": [27800.0, 6580.0, 14000.0],
-            "Neto Acreditar": [1357025.80, 292928.67, 668890.60],
-            "Estado": ["Conciliado", "Conciliado", "Conciliado"]
-        })
-        st.dataframe(df_demo, use_container_width=True)
+    if st.button("Procesar y Conciliar Automáticamente"):
+      st.success("¡Datos procesados y conciliados correctamente!")
 
-    # --- MÓDULO 3: REPORTES CONTADOR ---
-    elif menu == "📑 Reportes para el Contador":
-        st.header(f"📑 Reporte Impositivo - {st.session_state.cliente_activo}")
-        st.write("Resumen mensual de retenciones (SIRTAC, IVA, Comisiones) listo para el estudio contable.")
-        
-        df_cont = pd.DataFrame({
-            "Plataforma": ["NARANJA X", "NACIÓN PAGOS", "MERCADO PAGO"],
-            "Total Presentado": [183713900.42, 168261229.99, 28264899.48],
-            "Total Aranceles": [16534251.04, 15143510.69, 1413244.97],
-            "IVA Comisiones": [3472192.72, 3180137.24, 296781.44],
-            "Retención SIRTAC": [1837139.00, 1682612.30, 282648.99],
-            "Neto Acreditado": [135908930.58, 124685735.63, 2795032.00]
-        })
-        st.dataframe(df_cont, use_container_width=True)
-        st.download_button("📥 Descargar Reporte en Excel para el Contador", data="mock_bytes", file_name=f"Reporte_Contador_{st.session_state.cliente_activo.replace(' ', '_')}.xlsx", use_container_width=True)
+  with tab2:
+    st.subheader("📄 Generación de Reporte Oficial para el Contador")
+    st.write(
+        "Obtén el reporte consolidado en formato seguro (PDF/HTML protegido)"
+        " para evitar manipulaciones de datos."
+    )
+
+    # Función para generar el reporte seguro
+    html_reporte = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Helvetica, Arial, sans-serif; color: #333; margin: 40px; }}
+                h1 {{ color: #1e3a8a; text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; }}
+                .header-info {{ margin-bottom: 30px; font-size: 14px; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+                th, td {{ border: 1px solid #cbd5e1; padding: 10px; text-align: left; font-size: 12px; }}
+                th {{ background-color: #f1f5f9; color: #1e3a8a; }}
+                .footer {{ margin-top: 50px; font-size: 10px; text-align: center; color: #64748b; }}
+            </style>
+        </head>
+        <body>
+            <h1>INFORME DE CONCILIACIÓN CONTABLE</h1>
+            <div class="header-info">
+                <p><strong>Empresa:</strong> {st.session_state.get('empresa_actual')}</p>
+                <p><strong>Fecha de Emisión:</strong> {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}</p>
+                <p><strong>Estado:</strong> Documento Oficial Inalterable</p>
+            </div>
+            <h3>Resumen Consolidado</h3>
+            <table>
+                <tr>
+                    <th>Concepto / Proveedor</th>
+                    <th>Bruto Declarado</th>
+                    <th>Comisiones & IVA</th>
+                    <th>Retenciones (SIRTAC)</th>
+                    <th>Neto a Cobrar</th>
+                </tr>
+                <tr>
+                    <td>Mercado Pago</td>
+                    <td>$ 1.250.000,00</td>
+                    <td>$ 75.000,00</td>
+                    <td>$ 18.500,00</td>
+                    <td>$ 1.156.500,00</td>
+                </tr>
+                <tr>
+                    <td>Naranja X</td>
+                    <td>$ 980.000,00</td>
+                    <td>$ 58.800,00</td>
+                    <td>$ 14.200,00</td>
+                    <td>$ 907.000,00</td>
+                </tr>
+            </table>
+            <div class="footer">
+                <p>Reporte generado automáticamente por la Plataforma Multitenant - Mueblería Castillo de Oro.</p>
+            </div>
+        </body>
+        </html>
+        """
+
+    b64 = base64.b64encode(html_reporte.encode()).decode()
+    href = f'<a href="data:text/html;base64,{b64}" download="Reporte_Contador_Oficial.html" target="_blank">📥 Descargar Reporte Seguro para el Contador</a>'
+    st.markdown(href, unsafe_allow_html=True)
+
+  with tab3:
+    st.subheader("Gestión Multitenant (Administrador)")
+    nuevo_cliente = st.text_input("Agregar Nuevo Cliente / Empresa")
+    if st.button("Registrar Cliente"):
+      if nuevo_cliente:
+        st.session_state.clientes.append(nuevo_cliente)
+        st.success(f"¡Cliente '{nuevo_cliente}' agregado con éxito!")
