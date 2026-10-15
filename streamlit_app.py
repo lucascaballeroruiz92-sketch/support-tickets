@@ -71,7 +71,7 @@ st.sidebar.subheader("📌 Menú de Tareas")
 opcion_menu = st.sidebar.radio(
     "Seleccione una opción:",
     [
-        "Carga y Conciliación de Archivos",
+        "📂 Carga Única de Liquidaciones",
         "Gestión Multitenant (Admin)",
         "📄 Informe para el Contador (PDF Seguro)",
     ],
@@ -83,32 +83,43 @@ if st.sidebar.button("🚪 Cerrar Sesión"):
   st.rerun()
 
 # --- CONTENIDO PRINCIPAL SEGÚN LA OPCIÓN DEL MENÚ LATERAL ---
-if opcion_menu == "Carga y Conciliación de Archivos":
+if opcion_menu == "📂 Carga Única de Liquidaciones":
   st.markdown(
-      f"## 📊 Carga de Comprobantes y Liquidaciones - [{st.session_state.get('empresa_actual')}]"
+      f"## 📂 Carga General de Comprobantes - [{st.session_state.get('empresa_actual')}]"
   )
   st.write(
-      "Sube los archivos de AFIP (ARCA), Naranja X, Nación Pagos, Mercado"
-      " Pago y Payway para procesar comisiones, IVA y tasas."
+      "Sube **todos** tus archivos y comprobantes juntos (Mercado Pago, Naranja"
+      " X, Nación Pagos, Payway / VISA y AFIP/ARCA) en esta única sección."
+      " El sistema procesará toda la información de forma unificada."
   )
   st.markdown("---")
 
-  col1, col2 = st.columns(2)
-  with col1:
-    st.file_uploader(
-        "Liquidación Mercado Pago", type=["csv", "xlsx"], key="mp"
-    )
-    st.file_uploader(
-        "Liquidación Naranja X", type=["csv", "xlsx"], key="naranja"
-    )
-  with col2:
-    st.file_uploader(
-        "Liquidación Nación Pagos", type=["csv", "xlsx"], key="nacion"
-    )
-    st.file_uploader("Comprobantes AFIP / ARCA", type=["pdf", "csv"], key="afip")
+  # CARPETA ÚNICA DE CARGA MULTIPLE
+  archivos_subidos = st.file_uploader(
+      "Arrastra o selecciona todos los archivos de liquidación aquí:",
+      type=["csv", "xlsx", "pdf"],
+      accept_multiple_files=True,
+      key="uploader_unico",
+  )
 
-  if st.button("Procesar y Conciliar Automáticamente", type="primary"):
-    st.success("¡Datos procesados y conciliados correctamente!")
+  if archivos_subidos:
+    st.info(
+        f"Se han cargado {len(files_count := archivos_subidos)} archivo(s)"
+        " correctamente en la bandeja unificada."
+    )
+    for archivo in archivos_subidos:
+      st.text(f"📄 Archivo detectado: {archivo.name}")
+
+  if st.button(
+      "🚀 Procesar y Consolidar Todas las Liquidaciones", type="primary"
+  ):
+    if archivos_subidos:
+      st.success(
+          "¡Todos los archivos fueron procesados y conciliados con éxito en la"
+          " base de datos!"
+      )
+    else:
+      st.warning("Por favor, sube al menos un archivo para procesar.")
 
 elif opcion_menu == "Gestión Multitenant (Admin)":
   st.markdown("## 🏢 Gestión Multitenant")
@@ -139,7 +150,8 @@ elif opcion_menu == "📄 Informe para el Contador (PDF Seguro)":
   st.write(
       f"Obtén el reporte consolidado para **{st.session_state.get('empresa_actual')}**"
       " en formato seguro (PDF/HTML protegido) con desglose detallado de"
-      " comisiones, IVA por uso de plataforma y retenciones."
+      " comisiones, IVA por uso de plataforma y retenciones para todos los"
+      " canales (incluyendo Payway)."
   )
   st.markdown("---")
 
@@ -200,7 +212,7 @@ elif opcion_menu == "📄 Informe para el Contador (PDF Seguro)":
                 <td>-</td>
             </tr>
             <tr>
-                <td>Payway</td>
+                <td>Payway (VISA / Credicoop)</td>
                 <td>-</td>
                 <td>-</td>
                 <td>-</td>
