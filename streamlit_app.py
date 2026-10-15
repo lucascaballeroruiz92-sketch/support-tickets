@@ -107,8 +107,8 @@ elif opcion_menu == "📄 Informe para el Contador (PDF Seguro)":
   st.markdown("## 📄 Generación de Reporte Oficial para el Contador")
   st.write(
       "Obtén el reporte consolidado en formato seguro (PDF/HTML protegido)"
-      " para evitar manipulaciones de datos y garantizar la transparencia"
-      " contable."
+      " con desglose detallado de comisiones, IVA por uso de plataforma y"
+      " retenciones."
   )
   st.markdown("---")
 
@@ -116,33 +116,37 @@ elif opcion_menu == "📄 Informe para el Contador (PDF Seguro)":
     <html>
     <head>
         <style>
-            body {{ font-family: Helvetica, Arial, sans-serif; color: #333; margin: 40px; }}
-            h1 {{ color: #1e3a8a; text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; }}
-            .header-info {{ margin-bottom: 30px; font-size: 14px; }}
-            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
-            th, td {{ border: 1px solid #cbd5e1; padding: 10px; text-align: left; font-size: 12px; }}
-            th {{ background-color: #f1f5f9; color: #1e3a8a; }}
-            .footer {{ margin-top: 50px; font-size: 10px; text-align: center; color: #64748b; }}
+            body {{ font-family: Helvetica, Arial, sans-serif; color: #333; margin: 30px; }}
+            h1 {{ color: #1e3a8a; text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; font-size: 20px; }}
+            .header-info {{ margin-bottom: 20px; font-size: 13px; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 11px; }}
+            th, td {{ border: 1px solid #cbd5e1; padding: 8px; text-align: left; }}
+            th {{ background-color: #f1f5f9; color: #1e3a8a; text-align: center; }}
+            td {{ text-align: right; }}
+            td:first-child {{ text-align: left; font-weight: bold; }}
+            .footer {{ margin-top: 40px; font-size: 9px; text-align: center; color: #64748b; }}
         </style>
     </head>
     <body>
-        <h1>INFORME DE CONCILIACIÓN CONTABLE</h1>
+        <h1>INFORME DE CONCILIACIÓN CONTABLE Y FISCAL</h1>
         <div class="header-info">
             <p><strong>Empresa:</strong> {st.session_state.get('empresa_actual')}</p>
             <p><strong>Fecha de Emisión:</strong> {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}</p>
             <p><strong>Estado:</strong> Documento Oficial Inalterable (Contador)</p>
         </div>
-        <h3>Resumen Consolidado</h3>
+        <h3>Desglose Consolidado por Canal / Procesador</h3>
         <table>
             <tr>
                 <th>Concepto / Proveedor</th>
                 <th>Bruto Declarado</th>
-                <th>Comisiones & IVA</th>
-                <th>Retenciones (SIRTAC)</th>
+                <th>Comisión Plataforma</th>
+                <th>IVA (Tasas s/ Uso Plataforma)</th>
+                <th>Retenciones (SIRTAC / AFIP)</th>
                 <th>Neto a Cobrar</th>
             </tr>
             <tr>
                 <td>Mercado Pago</td>
+                <td>-</td>
                 <td>-</td>
                 <td>-</td>
                 <td>-</td>
@@ -154,6 +158,7 @@ elif opcion_menu == "📄 Informe para el Contador (PDF Seguro)":
                 <td>-</td>
                 <td>-</td>
                 <td>-</td>
+                <td>-</td>
             </tr>
             <tr>
                 <td>Nación Pagos</td>
@@ -161,9 +166,11 @@ elif opcion_menu == "📄 Informe para el Contador (PDF Seguro)":
                 <td>-</td>
                 <td>-</td>
                 <td>-</td>
+                <td>-</td>
             </tr>
             <tr>
                 <td>Payway</td>
+                <td>-</td>
                 <td>-</td>
                 <td>-</td>
                 <td>-</td>
