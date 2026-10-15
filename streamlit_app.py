@@ -1,172 +1,145 @@
-import datetime
-import random
-
-import altair as alt
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
 
-# Show app title and description.
-st.set_page_config(page_title="Support tickets", page_icon="🎫")
-st.title("🎫 Support tickets")
-st.write(
-    """
-    This app shows how you can build an internal tool in Streamlit. Here, we are 
-    implementing a support ticket workflow. The user can create a ticket, edit 
-    existing tickets, and view some statistics.
-    """
+st.set_page_config(
+    page_title="Sistema de Conciliación & Automatización Contable",
+    page_icon="💼",
+    layout="wide"
 )
 
-# Create a random Pandas dataframe with existing tickets.
-if "df" not in st.session_state:
-
-    # Set seed for reproducibility.
-    np.random.seed(42)
-
-    # Make up some fake issue descriptions.
-    issue_descriptions = [
-        "Network connectivity issues in the office",
-        "Software application crashing on startup",
-        "Printer not responding to print commands",
-        "Email server downtime",
-        "Data backup failure",
-        "Login authentication problems",
-        "Website performance degradation",
-        "Security vulnerability identified",
-        "Hardware malfunction in the server room",
-        "Employee unable to access shared files",
-        "Database connection failure",
-        "Mobile application not syncing data",
-        "VoIP phone system issues",
-        "VPN connection problems for remote employees",
-        "System updates causing compatibility issues",
-        "File server running out of storage space",
-        "Intrusion detection system alerts",
-        "Inventory management system errors",
-        "Customer data not loading in CRM",
-        "Collaboration tool not sending notifications",
+# --- BASE DE DATOS DE CLIENTES ---
+if "clientes" not in st.session_state:
+    st.session_state.clientes = [
+        "Mueblería Castillo de Oro",
+        "Comercio Ejemplo S.A.",
+        "➕ Agregar Nuevo Cliente..."
     ]
 
-    # Generate the dataframe with 100 rows/tickets.
-    data = {
-        "ID": [f"TICKET-{i}" for i in range(1100, 1000, -1)],
-        "Issue": np.random.choice(issue_descriptions, size=100),
-        "Status": np.random.choice(["Open", "In Progress", "Closed"], size=100),
-        "Priority": np.random.choice(["High", "Medium", "Low"], size=100),
-        "Date Submitted": [
-            datetime.date(2023, 6, 1) + datetime.timedelta(days=random.randint(0, 182))
-            for _ in range(100)
-        ],
-    }
-    df = pd.DataFrame(data)
+# --- CONTROL DE AUTENTICACIÓN ---
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user = None
+    st.session_state.cliente_activo = "Mueblería Castillo de Oro"
 
-    # Save the dataframe in session state (a dictionary-like object that persists across
-    # page runs). This ensures our data is persisted when the app updates.
-    st.session_state.df = df
+USERS = {
+    "colaborador1": "oro2026",
+    "colaborador2": "oro2026",
+    "admin": "admin2026"
+}
 
+def login_screen():
+    st.title("💼 Sistema de Automatización y Conciliación Contable")
+    st.markdown("### Acceso Multicliente (Administradores y Colaboradores)")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.form("login_form"):
+            cliente_sel = st.selectbox("Seleccionar Empresa / Cliente:", st.session_state.clientes)
+            username = st.text_input("Usuario (ej. colaborador1, colaborador2, admin)")
+            password = st.text_input("Contraseña", type="password")
+            submit = st.form_submit_button("Ingresar al Sistema", use_container_width=True)
+            
+            if submit:
+                if username in USERS and USERS[username] == password:
+                    st.session_state.logged_in = True
+                    st.session_state.user = username
+                    st.session_state.cliente_activo = cliente_sel
+                    st.rerun()
+                else:
+                    st.error("Usuario o contraseña incorrectos.")
 
-# Show a section to add a new ticket.
-st.header("Add a ticket")
-
-# We're adding tickets via an `st.form` and some input widgets. If widgets are used
-# in a form, the app will only rerun once the submit button is pressed.
-with st.form("add_ticket_form"):
-    issue = st.text_area("Describe the issue")
-    priority = st.selectbox("Priority", ["High", "Medium", "Low"])
-    submitted = st.form_submit_button("Submit")
-
-if submitted:
-    # Make a dataframe for the new ticket and append it to the dataframe in session
-    # state.
-    recent_ticket_number = int(max(st.session_state.df.ID).split("-")[1])
-    today = datetime.datetime.now().strftime("%m-%d-%Y")
-    df_new = pd.DataFrame(
-        [
-            {
-                "ID": f"TICKET-{recent_ticket_number+1}",
-                "Issue": issue,
-                "Status": "Open",
-                "Priority": priority,
-                "Date Submitted": today,
-            }
-        ]
+if not st.session_state.logged_in:
+    login_screen()
+else:
+    user = st.session_state.user
+    
+    # Barra lateral de navegación y selección de cliente
+    st.sidebar.title(f"👤 Usuario: {user}")
+    st.sidebar.markdown("---")
+    
+    cliente_actual = st.sidebar.selectbox(
+        "🏢 Cliente Activo:", 
+        st.session_state.clientes, 
+        index=st.session_state.clientes.index(st.session_state.cliente_activo) if st.session_state.cliente_activo in st.session_state.clientes else 0
     )
+    st.session_state.cliente_activo = cliente_actual
+    
+    # Encabezado principal personalizado
+    st.markdown(f"# 🏢 {st.session_state.cliente_activo}")
+    st.caption("Panel de Control de Conciliación de Pagos, Liquidaciones y ARCA")
+    st.markdown("---")
+    
+    menu = st.sidebar.radio("Navegación", [
+        "📥 Carga de Archivos y Liquidaciones", 
+        "📊 Planilla Maestra & Conciliación", 
+        "📑 Reportes para el Contador"
+    ])
+    
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Cerrar Sesión", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.user = None
+        st.rerun()
 
-    # Show a little success message.
-    st.write("Ticket submitted! Here are the ticket details:")
-    st.dataframe(df_new, use_container_width=True, hide_index=True)
-    st.session_state.df = pd.concat([df_new, st.session_state.df], axis=0)
+    # --- MÓDULO 1: CARGA DE ARCHIVOS ---
+    if menu == "📥 Carga de Archivos y Liquidaciones":
+        st.header(f"📥 Módulo de Carga - {st.session_state.cliente_activo}")
+        st.info("Tanto colaborador1, colaborador2 como el administrador pueden subir comprobantes en cualquier momento.")
+        
+        tab1, tab2, tab3, tab4 = st.tabs(["ARCA (Facturación)", "Naranja X", "Nación Pagos", "Mercado Pago"])
+        
+        with tab1:
+            st.subheader("Comprobantes Emitidos - ARCA (AFIP)")
+            st.file_uploader("Subir reporte ARCA (Excel / CSV)", type=["xlsx", "csv"], key="arca_up")
+            
+        with tab2:
+            st.subheader("Liquidaciones Naranja X")
+            st.file_uploader("Subir liquidación Naranja X", type=["pdf", "xlsx", "csv"], key="naranja_up")
+            
+        with tab3:
+            st.subheader("Liquidaciones Nación Pagos")
+            st.file_uploader("Subir liquidación Nación Pagos", type=["pdf", "xlsx", "csv"], key="nacion_up")
+            
+        with tab4:
+            st.subheader("Movimientos Mercado Pago")
+            st.file_uploader("Subir reporte Mercado Pago", type=["xlsx", "csv", "pdf"], key="mp_up")
+            
+        st.markdown("---")
+        if st.button("🚀 Procesar Archivos y Actualizar Planilla Maestra", use_container_width=True):
+            st.success(f"¡Archivos procesados con éxito para {st.session_state.cliente_activo}!")
 
-# Show section to view and edit existing tickets in a table.
-st.header("Existing tickets")
-st.write(f"Number of tickets: `{len(st.session_state.df)}`")
+    # --- MÓDULO 2: PLANILLA MAESTRA & CONCILIACIÓN ---
+    elif menu == "📊 Planilla Maestra & Conciliación":
+        st.header(f"📊 Planilla Maestra Consolidada - {st.session_state.cliente_activo}")
+        st.write("Vista unificada de facturas ARCA vs. cupones de cobro y deducciones.")
+        
+        df_demo = pd.DataFrame({
+            "Fecha": ["01/09/2026", "01/09/2026", "02/09/2026"],
+            "Factura ARCA": ["B-0006-2936", "B-0005-2533", "B-0006-2938"],
+            "Monto Total Factura": [1390000.0, 329000.0, 700000.0],
+            "Plataforma": ["NARANJA X", "MERCADO PAGO", "NACIÓN PAGOS"],
+            "Monto Cupón": [1390000.0, 329000.0, 700000.0],
+            "Aranceles / Cargos": [25020.0, 24373.0, 14140.0],
+            "IVA Comisiones": [5254.20, 5118.33, 2969.40],
+            "Retención SIRTAC": [27800.0, 6580.0, 14000.0],
+            "Neto Acreditar": [1357025.80, 292928.67, 668890.60],
+            "Estado": ["Conciliado", "Conciliado", "Conciliado"]
+        })
+        st.dataframe(df_demo, use_container_width=True)
 
-st.info(
-    "You can edit the tickets by double clicking on a cell. Note how the plots below "
-    "update automatically! You can also sort the table by clicking on the column headers.",
-    icon="✍️",
-)
-
-# Show the tickets dataframe with `st.data_editor`. This lets the user edit the table
-# cells. The edited data is returned as a new dataframe.
-edited_df = st.data_editor(
-    st.session_state.df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Status": st.column_config.SelectboxColumn(
-            "Status",
-            help="Ticket status",
-            options=["Open", "In Progress", "Closed"],
-            required=True,
-        ),
-        "Priority": st.column_config.SelectboxColumn(
-            "Priority",
-            help="Priority",
-            options=["High", "Medium", "Low"],
-            required=True,
-        ),
-    },
-    # Disable editing the ID and Date Submitted columns.
-    disabled=["ID", "Date Submitted"],
-)
-
-# Show some metrics and charts about the ticket.
-st.header("Statistics")
-
-# Show metrics side by side using `st.columns` and `st.metric`.
-col1, col2, col3 = st.columns(3)
-num_open_tickets = len(st.session_state.df[st.session_state.df.Status == "Open"])
-col1.metric(label="Number of open tickets", value=num_open_tickets, delta=10)
-col2.metric(label="First response time (hours)", value=5.2, delta=-1.5)
-col3.metric(label="Average resolution time (hours)", value=16, delta=2)
-
-# Show two Altair charts using `st.altair_chart`.
-st.write("")
-st.write("##### Ticket status per month")
-status_plot = (
-    alt.Chart(edited_df)
-    .mark_bar()
-    .encode(
-        x="month(Date Submitted):O",
-        y="count():Q",
-        xOffset="Status:N",
-        color="Status:N",
-    )
-    .configure_legend(
-        orient="bottom", titleFontSize=14, labelFontSize=14, titlePadding=5
-    )
-)
-st.altair_chart(status_plot, use_container_width=True, theme="streamlit")
-
-st.write("##### Current ticket priorities")
-priority_plot = (
-    alt.Chart(edited_df)
-    .mark_arc()
-    .encode(theta="count():Q", color="Priority:N")
-    .properties(height=300)
-    .configure_legend(
-        orient="bottom", titleFontSize=14, labelFontSize=14, titlePadding=5
-    )
-)
-st.altair_chart(priority_plot, use_container_width=True, theme="streamlit")
+    # --- MÓDULO 3: REPORTES CONTADOR ---
+    elif menu == "📑 Reportes para el Contador":
+        st.header(f"📑 Reporte Impositivo - {st.session_state.cliente_activo}")
+        st.write("Resumen mensual de retenciones (SIRTAC, IVA, Comisiones) listo para el estudio contable.")
+        
+        df_cont = pd.DataFrame({
+            "Plataforma": ["NARANJA X", "NACIÓN PAGOS", "MERCADO PAGO"],
+            "Total Presentado": [183713900.42, 168261229.99, 28264899.48],
+            "Total Aranceles": [16534251.04, 15143510.69, 1413244.97],
+            "IVA Comisiones": [3472192.72, 3180137.24, 296781.44],
+            "Retención SIRTAC": [1837139.00, 1682612.30, 282648.99],
+            "Neto Acreditado": [135908930.58, 124685735.63, 2795032.00]
+        })
+        st.dataframe(df_cont, use_container_width=True)
+        st.download_button("📥 Descargar Reporte en Excel para el Contador", data="mock_bytes", file_name=f"Reporte_Contador_{st.session_state.cliente_activo.replace(' ', '_')}.xlsx", use_container_width=True)
