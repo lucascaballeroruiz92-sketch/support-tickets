@@ -143,17 +143,31 @@ elif opcion_menu == "📄 Informe para el Contador (PDF Seguro)":
             </tr>
             <tr>
                 <td>Mercado Pago</td>
-                <td>$ 1.250.000,00</td>
-                <td>$ 75.000,00</td>
-                <td>$ 18.500,00</td>
-                <td>$ 1.156.500,00</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
             </tr>
             <tr>
                 <td>Naranja X</td>
-                <td>$ 980.000,00</td>
-                <td>$ 58.800,00</td>
-                <td>$ 14.200,00</td>
-                <td>$ 907.000,00</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+            </tr>
+            <tr>
+                <td>Nación Pagos</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+            </tr>
+            <tr>
+                <td>Payway</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
             </tr>
         </table>
         <div class="footer">
