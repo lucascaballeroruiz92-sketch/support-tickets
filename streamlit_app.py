@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Sistema de Conciliación - Mueblería Castillo de Oro",
+    page_title="Sistema de Conciliación Multicliente",
     page_icon="💼",
     layout="wide",
 )
@@ -28,10 +28,10 @@ if "empresa_actual" not in st.session_state:
 st.sidebar.image(
     "https://img.icons8.com/color/96/wooden-furniture.png", width=80
 )
-st.sidebar.title("Mueblería Castillo de Oro")
-st.sidebar.markdown("---")
 
 if not st.session_state["autenticado"]:
+  st.sidebar.title("Sistema de Conciliación")
+  st.sidebar.markdown("---")
   st.sidebar.subheader("🔒 Acceso al Sistema")
   cliente_seleccionado = st.sidebar.selectbox(
       "Seleccionar Empresa / Cliente:",
@@ -52,19 +52,25 @@ if not st.session_state["autenticado"]:
       st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
-# --- SI ESTÁ AUTENTICADO: MENÚ LATERAL Y PANEL PRINCIPAL ---
+# --- SI ESTÁ AUTENTICADO: MENÚ LATERAL DINÁMICO ---
+# El título principal ahora muestra dinámicamente la empresa seleccionada
+st.sidebar.title(f"{st.session_state.get('empresa_actual')}")
+st.sidebar.markdown("---")
 st.sidebar.success(f"Usuario: {st.session_state.get('usuario_actual')}")
 
 # Selector activo para cambiar de cliente en cualquier momento
 cliente_activo = st.sidebar.selectbox(
-    "Empresa Activa:",
+    "Cambiar Empresa Activa:",
     st.session_state.clientes,
     index=st.session_state.clientes.index(
         st.session_state.get("empresa_actual")
     ),
     key="select_menu_empresa",
 )
-st.session_state["empresa_actual"] = cliente_activo
+
+if cliente_activo != st.session_state.get("empresa_actual"):
+  st.session_state["empresa_actual"] = cliente_activo
+  st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Menú de Tareas")
@@ -94,7 +100,7 @@ if opcion_menu == "📂 Carga Única de Liquidaciones":
   )
   st.markdown("---")
 
-  # CARPETA ÚNICA DE CARGA MULTIPLE
+  # CARPETA ÚNICA DE CARGA MÚLTIPLE
   archivos_subidos = st.file_uploader(
       "Arrastra o selecciona todos los archivos de liquidación aquí:",
       type=["csv", "xlsx", "pdf"],
@@ -104,8 +110,8 @@ if opcion_menu == "📂 Carga Única de Liquidaciones":
 
   if archivos_subidos:
     st.info(
-        f"Se han cargado {len(files_count := archivos_subidos)} archivo(s)"
-        " correctamente en la bandeja unificada."
+        f"Se han cargado {len(archivos_subidos)} archivo(s) correctamente en la"
+        " bandeja unificada."
     )
     for archivo in archivos_subidos:
       st.text(f"📄 Archivo detectado: {archivo.name}")
@@ -221,7 +227,7 @@ elif opcion_menu == "📄 Informe para el Contador (PDF Seguro)":
             </tr>
         </table>
         <div class="footer">
-            <p>Reporte generado automáticamente por la Plataforma Multitenant - Mueblería Castillo de Oro.</p>
+            <p>Reporte generado automáticamente por la Plataforma Multitenant.</p>
         </div>
     </body>
     </html>
