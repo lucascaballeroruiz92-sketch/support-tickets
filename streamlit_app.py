@@ -35,39 +35,33 @@ if not st.session_state["autenticado"]:
       st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
-# --- MENÚ DE MÓDULOS PRINCIPALES ---
+# --- MENÚ DE MÓDULOS PRINCIPALES CON SUBMENÚ ANIDADO ---
 st.sidebar.success(f"Usuario: {st.session_state.get('usuario_actual')}")
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
 
-modulo_seleccionado = st.sidebar.radio(
-    "Seleccione el Módulo:",
-    [
-        "Ventas",
-        "Tesorería",
-        "Contabilidad",
-    ],
-    key="radio_modulo_principal",
-)
+opciones_menu = [
+    "📊 Ventas",
+    "💰 Tesorería - Liquidaciones",
+    "💰 Tesorería - Extractos Bancarios",
+    "📈 Contabilidad",
+]
 
-subseccion_tesoreria = None
-if modulo_seleccionado == "Tesorería":
-  st.sidebar.markdown("---")
-  subseccion_tesoreria = st.sidebar.radio(
-      "📁 Submenú Tesorería:",
-      ["Liquidaciones", "Extractos Bancarios"],
-      key="radio_subseccion_tesoreria",
-  )
+opcion_seleccionada = st.sidebar.radio(
+    "Seleccione el Módulo / Tarea:",
+    opciones_menu,
+    key="radio_menu_principal",
+)
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🚪 Cerrar Sesión"):
   st.session_state["autenticado"] = False
   st.rerun()
 
-# --- CONTENIDO SEGÚN MÓDULO SELECCIONADO ---
+# --- CONTENIDO SEGÚN OPCIÓN SELECCIONADA ---
 
 # 1. MÓDULO DE VENTAS
-if modulo_seleccionado == "Ventas":
+if opcion_seleccionada == "📊 Ventas":
   st.markdown("## 📊 Módulo de Ventas")
   st.write(
       "Gestión de facturación, comprobantes comerciales y registro de bruto"
@@ -91,68 +85,66 @@ if modulo_seleccionado == "Ventas":
     else:
       st.warning("Selecciona un archivo de ventas para registrar.")
 
-# 2. MÓDULO DE TESORERÍA
-elif modulo_seleccionado == "Tesorería":
-  if subseccion_tesoreria == "Liquidaciones":
-    st.markdown("## 💰 Tesorería - Liquidaciones")
-    st.write(
-        "Bandeja unificada de carga de liquidaciones y comprobantes para"
-        " procesar comisiones, tasas e impuestos."
-    )
-    st.markdown("---")
+# 2. TESORERÍA - LIQUIDACIONES
+elif opcion_seleccionada == "💰 Tesorería - Liquidaciones":
+  st.markdown("## 💰 Tesorería - Liquidaciones")
+  st.write(
+      "Bandeja unificada de carga de liquidaciones y comprobantes para"
+      " procesar comisiones, tasas e impuestos."
+  )
+  st.markdown("---")
 
-    archivos_liquidaciones = st.file_uploader(
-        "Arrastra o selecciona todos los archivos de liquidación aquí:",
-        type=["csv", "xlsx", "pdf"],
-        accept_multiple_files=True,
-        key="uploader_liquidaciones",
-    )
+  archivos_liquidaciones = st.file_uploader(
+      "Arrastra o selecciona todos los archivos de liquidación aquí:",
+      type=["csv", "xlsx", "pdf"],
+      accept_multiple_files=True,
+      key="uploader_liquidaciones",
+  )
 
+  if archivos_liquidaciones:
+    st.info(
+        f"Se han cargado {len(archivos_liquidaciones)} archivo(s) correctamente."
+    )
+    for archivo in archivos_liquidaciones:
+      st.text(f"📄 Archivo cargado: {archivo.name}")
+
+  if st.button("Procesar Liquidaciones", type="primary"):
     if archivos_liquidaciones:
-      st.info(
-          f"Se han cargado {len(archivos_liquidaciones)} archivo(s)"
-          " correctamente."
-      )
-      for archivo in archivos_liquidaciones:
-        st.text(f"📄 Archivo cargado: {archivo.name}")
+      st.success("¡Liquidaciones procesadas con éxito!")
+    else:
+      st.warning("Sube al menos un archivo para procesar.")
 
-    if st.button("Procesar Liquidaciones", type="primary"):
-      if archivos_liquidaciones:
-        st.success("¡Liquidaciones procesadas con éxito!")
-      else:
-        st.warning("Sube al menos un archivo para procesar.")
+# 3. TESORERÍA - EXTRACTOS BANCARIOS
+elif opcion_seleccionada == "💰 Tesorería - Extractos Bancarios":
+  st.markdown("## 💰 Tesorería - Extractos Bancarios")
+  st.write(
+      "Carga de extractos bancarios para automatizar el cálculo y la"
+      " conciliación de acreditaciones frente a lo pendiente de cobro."
+  )
+  st.markdown("---")
 
-  elif subseccion_tesoreria == "Extractos Bancarios":
-    st.markdown("## 💰 Tesorería - Extractos Bancarios")
-    st.write(
-        "Carga de extractos bancarios para automatizar el cálculo y la"
-        " conciliación de acreditaciones frente a lo pendiente de cobro."
-    )
-    st.markdown("---")
+  extractos_files = st.file_uploader(
+      "Subir extractos bancarios (PDF, CSV, XLSX):",
+      type=["csv", "xlsx", "pdf"],
+      accept_multiple_files=True,
+      key="uploader_extractos",
+  )
 
-    extractos_files = st.file_uploader(
-        "Subir extractos bancarios (PDF, CSV, XLSX):",
-        type=["csv", "xlsx", "pdf"],
-        accept_multiple_files=True,
-        key="uploader_extractos",
-    )
+  if extractos_files:
+    st.info(f"Se han cargado {len(extractos_files)} extracto(s) bancario(s).")
+    for ext in extractos_files:
+      st.text(f"🏦 Extracto detectado: {ext.name}")
 
+  if st.button("Conciliar con Extractos Bancarios", type="primary"):
     if extractos_files:
-      st.info(f"Se han cargado {len(extractos_files)} extracto(s) bancario(s).")
-      for ext in extractos_files:
-        st.text(f"🏦 Extracto detectado: {ext.name}")
+      st.success(
+          "¡Extractos conciliados correctamente con el módulo de contabilidad!"
+      )
+    else:
+      st.warning("Sube un extracto bancario para realizar la conciliación.")
 
-    if st.button("Conciliar con Extractos Bancarios", type="primary"):
-      if extractos_files:
-        st.success(
-            "¡Extractos conciliados correctamente con el módulo de"
-            " contabilidad!"
-        )
-      else:
-        st.warning("Sube un extracto bancario para realizar la conciliación.")
-
-# 3. MÓDULO DE CONTABILIDAD
-elif modulo_seleccionado == "Contabilidad":
+# 4. MÓDULO DE CONTABILIDAD
+elif opcion_seleccionada == "📈 Contabilidad":
   st.markdown("## 📈 Módulo de Contabilidad")
   st.write(
       "Resumen consolidado para **Mueblería Castillo de Oro**. Generación y"
