@@ -301,30 +301,56 @@ if st.sidebar.button("🚪 Salir"):
     st.rerun()
 
 
-@st.fragment(run_every=15)
-def panel_actividad_lateral():
-    st.sidebar.markdown("#### 🕘 Últimos movimientos")
-    df = consultar(
-        "SELECT momento, usuario, accion, detalle FROM actividad ORDER BY id DESC LIMIT 8"
+
+# ======================= MENÚ ACORDEÓN EN EL LATERAL =======================
+SUBMENUS = {
+    "📊 Ventas": ["Carga de Registro de Ventas"],
+    "💰 Tesorería": ["Liquidaciones", "Conciliación Bancaria"],
+    "📈 Contabilidad": ["Informes"],
+}
+
+if "bloque_abierto" not in st.session_state:
+    st.session_state["bloque_abierto"] = "📊 Ventas"
+
+
+def alternar_bloque(nombre):
+    actual = st.session_state["bloque_abierto"]
+    st.session_state["bloque_abierto"] = None if actual == nombre else nombre
+
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📌 Módulos")
+for nombre, opciones in SUBMENUS.items():
+    abierto = st.session_state["bloque_abierto"] == nombre
+    st.sidebar.button(
+        ("▾ " if abierto else "▸ ") + nombre,
+        key=f"btn_{nombre}",
+        on_click=alternar_bloque,
+        args=(nombre,),
+        use_container_width=True,
     )
-    for r in df.itertuples():
-        st.sidebar.caption(f"{r.momento[11:16]} · **{r.usuario}** · {r.accion}: {r.detalle}")
+    if abierto:
+        st.sidebar.radio(
+            "Submenú:",
+            opciones,
+            key=f"sub_{nombre}",
+            label_visibility="collapsed",
+        )
 
-
-panel_actividad_lateral()
-
-# ======================= TITULO Y PESTAÑAS =======================
 st.title("💳 Liquidaciones y Conciliación")
-t1, t2, t3, t4, t5 = st.tabs([
-    "📥 Facturas AFIP",
-    "💳 Liquidaciones",
-    "🔗 Conciliación",
-    "📊 Informes",
-    "🕘 Actividad",
-])
 
-# ---------- 1. FACTURAS AFIP ----------
-with t1:
+bloque = st.session_state["bloque_abierto"]
+if bloque is None:
+    st.info("Haga clic en un módulo del menú lateral para desplegar sus opciones.")
+    st.stop()
+
+if bloque == "📊 Ventas":
+    vista = SUBMENUS[bloque][0]
+else:
+    vista = st.session_state.get(f"sub_{bloque}", SUBMENUS[bloque][0])
+
+# ---------- 1. VENTAS: CARGA DE REGISTRO ----------
+if vista == "Carga de Registro de Ventas":
     st.subheader("Importar facturas emitidas desde AFIP")
     st.caption("En AFIP: Mis Comprobantes → Emitidos → Exportar (CSV o XLSX).")
     archivo = st.file_uploader("Archivo de AFIP", type=["csv", "xlsx"], key="up_afip")
@@ -350,8 +376,8 @@ with t1:
     st.caption(f"{len(facturas)} facturas en el rango | Total: {fmt(facturas.total.sum())}")
     st.dataframe(facturas, hide_index=True)
 
-# ---------- 2. LIQUIDACIONES ----------
-with t2:
+# ---------- 2. TESORERÍA: LIQUIDACIONES ----------
+if vista == "Liquidaciones":
     st.subheader("Registrar liquidación")
     facs = consultar("SELECT id, fecha, tipo, punto_venta, numero, total FROM facturas ORDER BY fecha DESC")
     opciones_fac = {
@@ -445,8 +471,8 @@ with t2:
         liqs = liqs[mask]
     st.dataframe(liqs, hide_index=True)
 
-# ---------- 3. CONCILIACIÓN ----------
-with t3:
+# ---------- 3. TESORERÍA: CONCILIACIÓN ----------
+if vista == "Conciliación Bancaria":
     st.subheader("Registrar acreditación bancaria")
     pend = consultar(
         """SELECT id, plataforma, nro_lote, neto_esperado FROM liquidaciones
@@ -519,8 +545,8 @@ with t3:
     )
     st.dataframe(control, hide_index=True)
 
-# ---------- 4. INFORMES ----------
-with t4:
+# ---------- 4. CONTABILIDAD: INFORMES ----------
+if vista == "Informes":
     st.subheader("Informes para la toma de decisiones")
     d3, h3 = selector_rango("inf")
     plats_db = consultar("SELECT DISTINCT plataforma FROM liquidaciones ORDER BY plataforma")
@@ -598,15 +624,4 @@ with t4:
         )
         registrar("Informe", f"Generó informe {d3} al {h3}")
 
-# ---------- 5. ACTIVIDAD ----------
-with t5:
-    st.subheader("Actividad del equipo (se actualiza sola cada 15 segundos)")
 
-    @st.fragment(run_every=15)
-    def tabla_actividad():
-        df = consultar(
-            "SELECT momento, usuario, accion, detalle FROM actividad ORDER BY id DESC LIMIT 200"
-        )
-        st.dataframe(df, hide_index=True)
-
-    tabla_actividad()
