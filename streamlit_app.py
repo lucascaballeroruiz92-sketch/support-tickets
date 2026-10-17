@@ -632,7 +632,10 @@ if st.sidebar.button("🚪 Salir"):
 
 SUBMENUS = {
     "📊 Ventas": ["Carga de Registro de Ventas"],
-    "💰 Tesorería": ["Liquidaciones", "Extractos Bancarios"],
+    "💰 Tesorería": {
+        "Liquidaciones": ["Carga de liquidación", "Vinculación de comprobantes", "Planilla Excel"],
+        "Extractos Bancarios": ["Carga de extractos", "Conciliación"],
+    },
     "📈 Contabilidad": [
         "Facturas vs neto final",
         "Facturas impagas tras cruce bancario",
@@ -661,7 +664,10 @@ for nombre, opciones in SUBMENUS.items():
         args=(nombre,),
         use_container_width=True,
     )
-    if abierto:
+    if abierto and isinstance(opciones, dict):
+        seccion = st.sidebar.radio("Submenú:", list(opciones), key=f"sec_{nombre}")
+        st.sidebar.radio("Opción:", opciones[seccion], key=f"hoja_{seccion}")
+    elif abierto:
         st.sidebar.radio("Submenú:", opciones, key=f"sub_{nombre}", label_visibility="collapsed")
 
 st.title("Castillo de Oro")
@@ -671,7 +677,14 @@ if bloque is None:
     st.info("Haga clic en un módulo del menú lateral para desplegar sus opciones.")
     st.stop()
 
-vista = SUBMENUS[bloque][0] if bloque == "📊 Ventas" else st.session_state.get(f"sub_{bloque}", SUBMENUS[bloque][0])
+hoja = None
+if bloque == "💰 Tesorería":
+    vista = st.session_state.get(f"sec_{bloque}", "Liquidaciones")
+    hoja = st.session_state.get(f"hoja_{vista}", SUBMENUS[bloque][vista][0])
+elif bloque == "📊 Ventas":
+    vista = SUBMENUS[bloque][0]
+else:
+    vista = st.session_state.get(f"sub_{bloque}", SUBMENUS[bloque][0])
 
 
 # ======================= 1. VENTAS =======================
@@ -839,10 +852,8 @@ def ext_conciliacion():
             st.dataframe(res.round(2), hide_index=True, use_container_width=True)
 
 
-def vista_liquidaciones():
+def vista_liquidaciones(sub):
     st.markdown("## 💰 Tesorería - Liquidaciones")
-    sub = st.radio("Sección:", ["Carga de liquidación", "Vinculación de comprobantes", "Planilla Excel"],
-                   horizontal=True, key="sub_liq")
     if sub == "Carga de liquidación":
         liq_carga()
     elif sub == "Vinculación de comprobantes":
@@ -851,9 +862,8 @@ def vista_liquidaciones():
         liq_planilla()
 
 
-def vista_extractos():
+def vista_extractos(sub):
     st.markdown("## 💰 Tesorería - Extractos Bancarios")
-    sub = st.radio("Sección:", ["Carga de extractos", "Conciliación"], horizontal=True, key="sub_ext")
     if sub == "Carga de extractos":
         ext_carga()
     else:
@@ -935,8 +945,8 @@ def vista_contabilidad(nombre):
 if vista == "Carga de Registro de Ventas":
     vista_ventas()
 elif vista == "Liquidaciones":
-    vista_liquidaciones()
+    vista_liquidaciones(hoja)
 elif vista == "Extractos Bancarios":
-    vista_extractos()
+    vista_extractos(hoja)
 elif bloque == "📈 Contabilidad":
     vista_contabilidad(vista)
