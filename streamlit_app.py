@@ -17,7 +17,7 @@ if "autenticado" not in st.session_state:
 
 # --- BARRA LATERAL (SIDEBAR) - AUTENTICACIÓN Y NAVEGACIÓN ---
 st.sidebar.image(
-    "https://img.icons8.com/color/96/wooden-furniture.png", width=80
+    "https://img.icons8.com/color/96/wooden-furniture.png", width=70
 )
 st.sidebar.title("Mueblería Castillo de Oro")
 st.sidebar.markdown("---")
@@ -36,7 +36,7 @@ if not st.session_state["autenticado"]:
       st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
-# --- MENÚ DE MÓDULOS PRINCIPALES CON DESPLEGABLES ---
+# --- MENÚ DE NAVEGACIÓN LATERAL CON EXPANDERS ---
 st.sidebar.success(f"Usuario: {st.session_state.get('usuario_actual')}")
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
@@ -44,26 +44,26 @@ st.sidebar.subheader("📌 Módulos Principales")
 if "modulo_activo" not in st.session_state:
   st.session_state["modulo_activo"] = "Ventas"
 
-# 1. Módulo Ventas (Botón directo)
+# 1. Ventas (Botón directo)
 if st.sidebar.button(
     "📊 Ventas", use_container_width=True, key="btn_menu_ventas"
 ):
   st.session_state["modulo_activo"] = "Ventas"
   st.rerun()
 
-# 2. Módulo Tesorería (Con submenú desplegable)
+# 2. Tesorería (Expander con submenú automático)
 with st.sidebar.expander("💰 Tesorería", expanded=False):
   sub_tesoreria = st.radio(
       "Seleccione una opción:",
       ["Liquidaciones", "Extractos Bancarios"],
       key="radio_sub_tesoreria",
   )
-  nuevo_estado = f"Tesorería - {sub_tesoreria}"
-  if st.session_state["modulo_activo"] != nuevo_estado:
-    st.session_state["modulo_activo"] = nuevo_estado
+  nuevo_estado_tes = f"Tesorería - {sub_tesoreria}"
+  if st.session_state["modulo_activo"] != nuevo_estado_tes:
+    st.session_state["modulo_activo"] = nuevo_estado_tes
     st.rerun()
 
-# 3. Módulo Contabilidad (Con submenú desplegable de informes)
+# 3. Contabilidad (Expander con submenú de informes automático)
 with st.sidebar.expander("📈 Contabilidad", expanded=False):
   sub_contabilidad = st.radio(
       "Seleccione un informe:",
@@ -88,7 +88,7 @@ if st.sidebar.button("🚪 Cerrar Sesión"):
 # --- CONTENIDO SEGÚN LA SELECCIÓN ---
 modulo_actual = st.session_state["modulo_activo"]
 
-# A. VENTAS
+# 1. VENTAS
 if modulo_actual == "Ventas":
   st.markdown("## 📊 Módulo de Ventas")
   st.write(
@@ -113,8 +113,8 @@ if modulo_actual == "Ventas":
     else:
       st.warning("Selecciona un archivo de ventas para registrar.")
 
-# B. TESORERÍA - LIQUIDACIONES
-elif "Tesorería - Liquidaciones" in modulo_actual:
+# 2. TESORERÍA - LIQUIDACIONES
+elif modulo_actual == "Tesorería - Liquidaciones":
   st.markdown("## 💰 Tesorería - Liquidaciones")
   st.write(
       "Bandeja unificada de carga de liquidaciones y comprobantes para"
@@ -142,8 +142,8 @@ elif "Tesorería - Liquidaciones" in modulo_actual:
     else:
       st.warning("Sube al menos un archivo para procesar.")
 
-# C. TESORERÍA - EXTRACTOS BANCARIOS
-elif "Tesorería - Extractos Bancarios" in modulo_actual:
+# 3. TESORERÍA - EXTRACTOS BANCARIOS
+elif modulo_actual == "Tesorería - Extractos Bancarios":
   st.markdown("## 💰 Tesorería - Extractos Bancarios")
   st.write(
       "Carga de extractos bancarios para automatizar el cálculo y la"
@@ -171,7 +171,7 @@ elif "Tesorería - Extractos Bancarios" in modulo_actual:
     else:
       st.warning("Sube un extracto bancario para realizar la conciliación.")
 
-# D. CONTABILIDAD - INFORMES CON RANGO DE FECHAS
+# 4. CONTABILIDAD - INFORMES CON FILTRO DE PERÍODO
 elif "Contabilidad" in modulo_actual:
   nombre_informe = modulo_actual.split(" - ")[1]
   st.markdown(f"## 📈 Contabilidad - {nombre_informe}")
