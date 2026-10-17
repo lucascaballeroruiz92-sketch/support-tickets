@@ -36,7 +36,7 @@ if not st.session_state["autenticado"]:
       st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
-# --- MENÚ DE NAVEGACIÓN LATERAL CON EXPANDERS ---
+# --- MENÚ DE NAVEGACIÓN LATERAL (3 BLOQUES PRINCIPALES CON SUBMENÚS) ---
 st.sidebar.success(f"Usuario: {st.session_state.get('usuario_actual')}")
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
@@ -44,26 +44,26 @@ st.sidebar.subheader("📌 Módulos Principales")
 if "modulo_activo" not in st.session_state:
   st.session_state["modulo_activo"] = "Ventas"
 
-# 1. Ventas (Botón directo)
+# 1. BLOQUE VENTAS (Acceso directo)
 if st.sidebar.button(
     "📊 Ventas", use_container_width=True, key="btn_menu_ventas"
 ):
   st.session_state["modulo_activo"] = "Ventas"
   st.rerun()
 
-# 2. Tesorería (Expander con submenú automático)
+# 2. BLOQUE TESORERÍA (Desplegable con submenú)
 with st.sidebar.expander("💰 Tesorería", expanded=False):
   sub_tesoreria = st.radio(
       "Seleccione una opción:",
       ["Liquidaciones", "Extractos Bancarios"],
       key="radio_sub_tesoreria",
   )
-  nuevo_estado_tes = f"Tesorería - {sub_tesoreria}"
-  if st.session_state["modulo_activo"] != nuevo_estado_tes:
-    st.session_state["modulo_activo"] = nuevo_estado_tes
+  estado_destino = f"Tesorería - {sub_tesoreria}"
+  if st.session_state["modulo_activo"] != estado_destino:
+    st.session_state["modulo_activo"] = estado_destino
     st.rerun()
 
-# 3. Contabilidad (Expander con submenú de informes automático)
+# 3. BLOQUE CONTABILIDAD (Desplegable con submenú de informes)
 with st.sidebar.expander("📈 Contabilidad", expanded=False):
   sub_contabilidad = st.radio(
       "Seleccione un informe:",
@@ -75,9 +75,9 @@ with st.sidebar.expander("📈 Contabilidad", expanded=False):
       ],
       key="radio_sub_contabilidad",
   )
-  nuevo_estado_cont = f"Contabilidad - {sub_contabilidad}"
-  if st.session_state["modulo_activo"] != nuevo_estado_cont:
-    st.session_state["modulo_activo"] = nuevo_estado_cont
+  estado_destino_cont = f"Contabilidad - {sub_contabilidad}"
+  if st.session_state["modulo_activo"] != estado_destino_cont:
+    st.session_state["modulo_activo"] = estado_destino_cont
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -85,10 +85,10 @@ if st.sidebar.button("🚪 Cerrar Sesión"):
   st.session_state["autenticado"] = False
   st.rerun()
 
-# --- CONTENIDO SEGÚN LA SELECCIÓN ---
+# --- RENDERIZADO DE CONTENIDO SEGÚN LA SELECCIÓN ---
 modulo_actual = st.session_state["modulo_activo"]
 
-# 1. VENTAS
+# A. MÓDULO VENTAS
 if modulo_actual == "Ventas":
   st.markdown("## 📊 Módulo de Ventas")
   st.write(
@@ -113,7 +113,7 @@ if modulo_actual == "Ventas":
     else:
       st.warning("Selecciona un archivo de ventas para registrar.")
 
-# 2. TESORERÍA - LIQUIDACIONES
+# B. TESORERÍA - LIQUIDACIONES
 elif modulo_actual == "Tesorería - Liquidaciones":
   st.markdown("## 💰 Tesorería - Liquidaciones")
   st.write(
@@ -142,7 +142,7 @@ elif modulo_actual == "Tesorería - Liquidaciones":
     else:
       st.warning("Sube al menos un archivo para procesar.")
 
-# 3. TESORERÍA - EXTRACTOS BANCARIOS
+# C. TESORERÍA - EXTRACTOS BANCARIOS
 elif modulo_actual == "Tesorería - Extractos Bancarios":
   st.markdown("## 💰 Tesorería - Extractos Bancarios")
   st.write(
@@ -171,7 +171,7 @@ elif modulo_actual == "Tesorería - Extractos Bancarios":
     else:
       st.warning("Sube un extracto bancario para realizar la conciliación.")
 
-# 4. CONTABILIDAD - INFORMES CON FILTRO DE PERÍODO
+# D. CONTABILIDAD - INFORMES CON RANGO DE FECHAS
 elif "Contabilidad" in modulo_actual:
   nombre_informe = modulo_actual.split(" - ")[1]
   st.markdown(f"## 📈 Contabilidad - {nombre_informe}")
