@@ -36,8 +36,15 @@ if not st.session_state["autenticado"]:
       st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
-# --- MENÚ DE NAVEGACIÓN LATERAL (3 BLOQUES PRINCIPALES CON SUBMENÚS) ---
-st.sidebar.success(f"Usuario: {st.session_state.get('usuario_actual')}")
+# --- USUARIO Y CIERRE DE SESIÓN VISIBLE ARRIBA ---
+col_u1, col_u2 = st.sidebar.columns([3, 2])
+with col_u1:
+  st.write(f"👤 **{st.session_state.get('usuario_actual')}**")
+with col_u2:
+  if st.button("🚪 Salir", key="btn_logout_top"):
+    st.session_state["autenticado"] = False
+    st.rerun()
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
 
@@ -79,11 +86,6 @@ with st.sidebar.expander("📈 Contabilidad", expanded=False):
   if st.session_state["modulo_activo"] != estado_destino_cont:
     st.session_state["modulo_activo"] = estado_destino_cont
     st.rerun()
-
-st.sidebar.markdown("---")
-if st.sidebar.button("🚪 Cerrar Sesión"):
-  st.session_state["autenticado"] = False
-  st.rerun()
 
 # --- RENDERIZADO DE CONTENIDO SEGÚN LA SELECCIÓN ---
 modulo_actual = st.session_state["modulo_activo"]
