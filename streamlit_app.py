@@ -15,6 +15,7 @@ st.set_page_config(
 USUARIOS = {"socio1": "clave1", "socio2": "clave2"}
 
 
+# ======================= UTILIDADES =======================
 def leer_archivo(archivo):
     """Lee CSV o XLSX y devuelve un DataFrame. Reinicia el puntero del archivo."""
     archivo.seek(0)
@@ -31,13 +32,13 @@ def selector_rango(key):
     return desde, hasta
 
 
-# --- CONTROL DE SESIÓN ---
+# ======================= SESIÓN =======================
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
 if "archivos" not in st.session_state:
     st.session_state["archivos"] = {}
 
-# --- BARRA LATERAL: AUTENTICACIÓN ---
+# ======================= LOGIN =======================
 st.sidebar.image("https://img.icons8.com/color/96/wooden-furniture.png", width=70)
 st.sidebar.title("Mueblería Castillo de Oro")
 st.sidebar.markdown("---")
@@ -58,7 +59,7 @@ if not st.session_state["autenticado"]:
             st.sidebar.error("Usuario o contraseña incorrectos.")
     st.stop()
 
-# --- CABECERA DE USUARIO Y SALIDA ---
+# ======================= CABECERA DE USUARIO =======================
 col_u1, col_u2 = st.sidebar.columns([2, 1])
 with col_u1:
     st.write(f"👤 **{st.session_state['usuario_actual']}**")
@@ -67,33 +68,51 @@ with col_u2:
         st.session_state["autenticado"] = False
         st.rerun()
 
+# ======================= MENÚ: BLOQUE Y SUBMENÚ =======================
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
 
-menu_opcion = st.sidebar.selectbox(
-    "Seleccione Sección / Módulo:",
-    [
-        "📊 Ventas",
-        "💰 Tesorería - Liquidaciones",
-        "💰 Tesorería - Extractos Bancarios",
-        "📈 Contabilidad - Reporte Consolidado Ventas vs Acreditaciones",
-        "📈 Contabilidad - Reporte de Deducciones y Aranceles",
-        "📈 Contabilidad - Reporte de Pendientes de Acreditación",
-        "📈 Contabilidad - Reporte de Conciliación Bancaria",
-    ],
-    key="select_menu_principal",
+bloque = st.sidebar.radio(
+    "Módulo:",
+    ["📊 Ventas", "💰 Tesorería", "📈 Contabilidad"],
+    key="menu_bloque",
 )
 
-# --- 1. VENTAS ---
-if menu_opcion == "📊 Ventas":
-    st.markdown("## 📊 Módulo de Ventas")
+if bloque == "📊 Ventas":
+    subopcion = st.sidebar.radio(
+        "Submenú:",
+        ["Carga de Registro de Ventas"],
+        key="menu_ventas",
+    )
+elif bloque == "💰 Tesorería":
+    subopcion = st.sidebar.radio(
+        "Submenú:",
+        ["Liquidaciones", "Extractos Bancarios"],
+        key="menu_tesoreria",
+    )
+else:
+    subopcion = st.sidebar.radio(
+        "Informe:",
+        [
+            "Reporte Consolidado Ventas vs Acreditaciones",
+            "Reporte de Deducciones y Aranceles",
+            "Reporte de Pendientes de Acreditación",
+            "Reporte de Conciliación Bancaria",
+        ],
+        key="menu_contabilidad",
+    )
+
+
+# ======================= 1. VENTAS =======================
+def vista_ventas():
+    st.markdown("## 📊 Ventas")
+    st.markdown("### Carga de Registro de Ventas")
     st.write(
         "Gestión de facturación, comprobantes comerciales y registro de bruto "
         "declarado para **Mueblería Castillo de Oro**."
     )
     st.markdown("---")
 
-    st.subheader("Carga de Registro de Ventas")
     ventas_file = st.file_uploader(
         "Subir archivo de registro de ventas / facturación (CSV, XLSX):",
         type=["csv", "xlsx"],
@@ -105,7 +124,8 @@ if menu_opcion == "📊 Ventas":
             try:
                 st.session_state["archivos"]["ventas"] = leer_archivo(ventas_file)
                 st.success(
-                    f"¡Registro de ventas actualizado! {len(st.session_state['archivos']['ventas'])} filas leídas."
+                    f"¡Registro de ventas actualizado! "
+                    f"{len(st.session_state['archivos']['ventas'])} filas leídas."
                 )
             except Exception as e:
                 st.error(f"No se pudo leer el archivo: {e}")
@@ -116,8 +136,9 @@ if menu_opcion == "📊 Ventas":
         st.markdown("#### Vista previa de ventas registradas")
         st.dataframe(st.session_state["archivos"]["ventas"], hide_index=True)
 
-# --- 2. TESORERÍA - LIQUIDACIONES ---
-elif menu_opcion == "💰 Tesorería - Liquidaciones":
+
+# ======================= 2. TESORERÍA =======================
+def vista_liquidaciones():
     st.markdown("## 💰 Tesorería - Liquidaciones")
     st.write(
         "Bandeja unificada de carga de liquidaciones y comprobantes para procesar "
@@ -147,8 +168,8 @@ elif menu_opcion == "💰 Tesorería - Liquidaciones":
             except Exception as e:
                 st.error(f"No se pudo leer {archivo.name}: {e}")
 
-# --- 3. TESORERÍA - EXTRACTOS BANCARIOS ---
-elif menu_opcion == "💰 Tesorería - Extractos Bancarios":
+
+def vista_extractos():
     st.markdown("## 💰 Tesorería - Extractos Bancarios")
     st.write(
         "Carga de extractos bancarios para automatizar el cálculo y la conciliación "
@@ -178,9 +199,9 @@ elif menu_opcion == "💰 Tesorería - Extractos Bancarios":
             except Exception as e:
                 st.error(f"No se pudo leer {ext.name}: {e}")
 
-# --- 4. CONTABILIDAD - INFORMES ---
-elif menu_opcion.startswith("📈 Contabilidad"):
-    nombre_informe = menu_opcion.split(" - ", 1)[1]
+
+# ======================= 3. CONTABILIDAD =======================
+def vista_contabilidad(nombre_informe):
     st.markdown(f"## 📈 Contabilidad - {nombre_informe}")
     st.write(
         "Seleccione el rango de fechas para auditar y generar el informe oficial "
@@ -196,8 +217,8 @@ elif menu_opcion.startswith("📈 Contabilidad"):
     st.markdown("---")
 
     st.info(
-        "Los importes de este informe se calcularán cuando estén conectados los datos "
-        "de ventas, liquidaciones y extractos. Por ahora se muestran como referencia."
+        "Los importes se calcularán cuando estén conectados los datos de ventas, "
+        "liquidaciones y extractos. Por ahora se muestran como referencia."
     )
 
     if nombre_informe == "Reporte Consolidado Ventas vs Acreditaciones":
@@ -230,7 +251,6 @@ elif menu_opcion.startswith("📈 Contabilidad"):
         st.subheader("🏦 Verificación de Extracto Bancario del Período")
         st.write("Sin datos cargados todavía para este período.")
 
-    # --- DESCARGA DEL INFORME (método confiable) ---
     html_reporte = f"""<html>
 <head><meta charset="utf-8">
 <style>
@@ -253,6 +273,7 @@ elif menu_opcion.startswith("📈 Contabilidad"):
         f"{nombre_informe.replace(' ', '_')}_"
         f"{fecha_desde.strftime('%Y%m%d')}_al_{fecha_hasta.strftime('%Y%m%d')}.html"
     )
+    st.markdown("<br>", unsafe_allow_html=True)
     st.download_button(
         "📥 Descargar Informe Oficial del Período",
         data=html_reporte.encode("utf-8"),
@@ -260,3 +281,15 @@ elif menu_opcion.startswith("📈 Contabilidad"):
         mime="text/html",
         type="primary",
     )
+
+
+# ======================= RENDERIZADO SEGÚN SUBMENÚ =======================
+if bloque == "📊 Ventas":
+    vista_ventas()
+elif bloque == "💰 Tesorería":
+    if subopcion == "Liquidaciones":
+        vista_liquidaciones()
+    else:
+        vista_extractos()
+else:
+    vista_contabilidad(subopcion)
