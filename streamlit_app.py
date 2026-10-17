@@ -54,14 +54,21 @@ CREATE TABLE IF NOT EXISTS liquidacion_impuestos (
     monto REAL
 );
 CREATE TABLE IF NOT EXISTS liquidacion_filas (
-    liquidacion_id INTEGER,
-    fecha TEXT,
-    monto REAL
+    liquidacion_id INTEGER, fecha TEXT, monto REAL
 );
 CREATE TABLE IF NOT EXISTS liquidacion_comprobantes (
-    liquidacion_id INTEGER,
-    pv TEXT,
-    numero TEXT
+    liquidacion_id INTEGER, pv TEXT, numero TEXT
+);
+CREATE TABLE IF NOT EXISTS liquidacion_pdf (
+    liquidacion_id INTEGER PRIMARY KEY, neto_pdf REAL
+);
+CREATE TABLE IF NOT EXISTS extractos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    archivo TEXT, banco TEXT, periodo_desde TEXT, periodo_hasta TEXT,
+    cargado_por TEXT, fecha_carga TEXT
+);
+CREATE TABLE IF NOT EXISTS extracto_movimientos (
+    extracto_id INTEGER, fecha TEXT, descripcion TEXT, monto REAL
 );
 CREATE TABLE IF NOT EXISTS actividad (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -137,7 +144,7 @@ def sin_acentos(t):
 
 
 def calcular(bruto, com, cf, iva_com, ret, neto_acred, fecha_acred):
-    """Devuelve (neto_esperado, diferencia, estado)."""
+    """Devuelve (neto_esperado, diferencia, estado) a partir de bruto y deducciones."""
     esperado = (bruto or 0) - (com or 0) - (cf or 0) - (iva_com or 0) - (ret or 0)
     if not fecha_acred:
         return round(esperado, 2), None, "Pendiente de acreditación"
@@ -146,20 +153,42 @@ def calcular(bruto, com, cf, iva_com, ret, neto_acred, fecha_acred):
     return round(esperado, 2), round(dif, 2), estado
 
 
+def selector_rango(key):
+    hoy = date.today()
+    c1, c2 = st.columns(2)
+    d = c1.date_input("Desde", value=date(hoy.year, 1, 1), key=f"{key}_d")
+    h = c2.date_input("Hasta", value=hoy, key=f"{key}_h")
+    return d.isoformat(), h.isoformat()
+
+
 # ======================= LECTURA DE PDF DE LIQUIDACIONES =======================
 NUM_RE = re.compile(r"-?\$?\s?\d{1,3}(?:\.\d{3})*,\d{2}")
 FECHA_RE = re.compile(r"\b(\d{2})[/.-](\d{2})[/.-](\d{4})\b")
+FILA_FECHA_MONTO_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\b.*?(\d{1,3}(?:\.\d{3})*,\d{2})")
+# Comprobante de factura: solo punto de venta y número (el tipo de letra no se usa)
+COMP_RE = re.compile(r"(?:comprobante|factura|cbte)[^\n\d]{0,30}(\d{4,5})\s?-\s?(\d{6,8})", re.I)
 PLAT_CLAVES = {
     "naranja": "Naranja X", "banco naci": "Banco Nación", "mercado pago": "Mercado Pago",
     "payway": "Payway", "fiserv": "Fiserv", "+pagos": "+Pagos", "credicoop": "Banco Credicoop",
     "galicia": "Banco Galicia", "santander": "Banco Santander", "bbva": "BBVA", "macro": "Banco Macro",
 }
-FILA_FECHA_MONTO_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\b.*?(\d{1,3}(?:\.\d{3})*,\d{2})")
+
+
+def importe_en(linea, primero=False):
+    nums = NUM_RE.findall(linea)
+    if not nums:
+        return None
+    return num(nums[0] if primero else nums[-1])
+
+
+def tasa_iva(s):
+    """Extrae la alícuota de una línea de IVA (21, 10.5 o 27)."""
+    m = re.search(r"iva\D*(\d+(?:[.,]\d+)?)", s)
+    return float(m[1].replace(",", ".")) if m else None
 
 
 def filas_por_fecha(texto):
-    """Lee las filas del PDF que empiezan con fecha de compra y traen un importe.
-    Devuelve [{'fecha': date, 'monto': float}]."""
+    """Filas del PDF que empiezan con fecha de compra y traen un importe."""
     filas = []
     for linea in texto.splitlines():
         m = FILA_FECHA_MONTO_RE.match(linea.strip())
@@ -173,57 +202,8 @@ def filas_por_fecha(texto):
     return filas
 
 
-def buscar_combinacion(cands, objetivo):
-    """Busca 1 a 4 facturas cuya suma coincida con el objetivo (tolerancia TOLERANCIA)."""
-    for k in range(1, min(4, len(cands)) + 1):
-        for combo in combinations(cands, k):
-            if abs(sum(c[2] for c in combo) - objetivo) <= TOLERANCIA:
-                return combo
-    return None
-
-
-def cruzar_por_dia(filas):
-    """Por cada fila: facturas de AFIP con fecha ±1 día cuya suma coincida con el monto.
-    Estados: Conciliado / Revisar / Posnet sin factura."""
-    ids = set()
-    totales = {"Conciliado": 0.0, "Revisar": 0.0, "Posnet sin factura": 0.0}
-    for fila in filas:
-        f = fila["fecha"].isoformat()
-        df = consultar(
-            """SELECT id, fecha, total FROM facturas
-               WHERE fecha BETWEEN date(?, '-1 day') AND date(?, '+1 day')
-                 AND id NOT IN (SELECT factura_id FROM liquidacion_factura)
-               ORDER BY ABS(julianday(fecha) - julianday(?))""",
-            (f, f, f),
-        )
-        cands = [(int(r.id), r.fecha, float(r.total)) for r in df.itertuples()][:12]
-        combo = buscar_combinacion(cands, fila["monto"]) if cands else None
-        if combo:
-            ids.update(c[0] for c in combo)
-            estado = "Conciliado"
-        elif cands:
-            estado = "Revisar"
-        else:
-            estado = "Posnet sin factura"
-        totales[estado] += fila["monto"]
-    textos = [
-        f"Cruce por día: conciliado {fmt(totales['Conciliado'])}",
-        f"posnet sin factura {fmt(totales['Posnet sin factura'])}",
-        f"a revisar {fmt(totales['Revisar'])}",
-    ]
-    return sorted(ids), textos
-
-
-def importe_en(linea, primero=False):
-    """Devuelve el último (o primer) importe de la línea, con su signo."""
-    nums = NUM_RE.findall(linea)
-    if not nums:
-        return None
-    return num(nums[0] if primero else nums[-1])
-
-
 def extraer_liquidacion_pdf(archivo):
-    """Lee el PDF de Naranja y de otras plataformas por etiqueta de línea."""
+    """Lee el PDF de la liquidación y separa los impuestos por alícuota y tipo."""
     archivo.seek(0)
     with pdfplumber.open(archivo) as pdf:
         texto = "\n".join((p.extract_text() or "") for p in pdf.pages)
@@ -234,29 +214,17 @@ def extraer_liquidacion_pdf(archivo):
     ll = [sin_acentos(l) for l in lineas]
     datos, avisos = {}, []
 
-    def sumar(patron, excluir=("total",)):
-        """Suma (en valor absoluto) los importes de las líneas que empiezan con el patrón."""
+    def sumar_si(cond):
         total, hallado = 0.0, False
         for l, s in zip(lineas, ll):
-            if re.search(patron, s) and not any(e in s for e in excluir):
+            if cond(s):
                 v = importe_en(l)
                 if v is not None:
                     total += abs(v)
                     hallado = True
-        return round(total, 2) if hallado else None
+        return round(total, 2) if hallado else 0.0
 
-    def valor_siguiente(patron):
-        """Importe de la línea del rótulo o, si el rótulo va solo, de la línea siguiente."""
-        for i, s in enumerate(ll):
-            if re.search(patron, s):
-                v = importe_en(lineas[i])
-                if v is None and i + 1 < len(lineas):
-                    v = importe_en(lineas[i + 1])
-                if v is not None:
-                    return abs(v)
-        return None
-
-    # Bruto: primera línea 'Totales' (primer importe de la fila)
+    # Bruto: primera fila 'Totales'
     bruto = None
     for l, s in zip(lineas, ll):
         if re.match(r"^totales\b", s):
@@ -264,30 +232,45 @@ def extraer_liquidacion_pdf(archivo):
             if bruto is not None:
                 break
     if bruto is None:
-        bruto = valor_siguiente(r"total presentado|importe total|total ventas|venta total|total cupones")
+        for i, s in enumerate(ll):
+            if re.search(r"total presentado|importe total|total ventas|venta total|total cupones", s):
+                bruto = importe_en(lineas[i])
+                break
     if bruto is not None:
         datos["f_bruto"] = abs(bruto)
     else:
         avisos.append("No se encontró el importe de 'bruto'.")
 
-    # Comisiones: arancel menos bonificación
-    arancel = sumar(r"^arancel")
-    bonif = sumar(r"^bonificacion")
-    if arancel is not None or bonif is not None:
-        datos["f_com"] = round((arancel or 0) - (bonif or 0), 2)
-    cf = sumar(r"^interes|^financiacion|^costo financiero|^cargo financiero")
-    if cf is not None:
-        datos["f_cf"] = cf
-    iva = sumar(r"^iva\b")
-    if iva is not None:
-        datos["f_iva"] = iva
-    ret = sumar(r"^(sirtac|percepcion|retencion|iibb|ingresos brutos|bienes durables|per\. ?iva)")
-    if ret is not None:
-        datos["f_ret"] = ret
+    arancel = sumar_si(lambda s: s.startswith("arancel") or s.startswith("comision"))
+    bonif = sumar_si(lambda s: s.startswith("bonificacion"))
+    datos["f_com"] = round(arancel - bonif, 2)
+    datos["f_cf"] = sumar_si(lambda s: re.match(r"(interes|financiacion|costo financiero|cargo financiero)", s) is not None)
 
-    neto = valor_siguiente(r"^neto liquidado|total recibido|neto a (pagar|acreditar|cobrar)")
+    iva21 = sumar_si(lambda s: s.startswith("iva") and tasa_iva(s) == 21.0)
+    iva105 = sumar_si(lambda s: s.startswith("iva") and tasa_iva(s) == 10.5)
+    iva27 = sumar_si(lambda s: s.startswith("iva") and tasa_iva(s) == 27.0)
+    perc = sumar_si(lambda s: "percepcion" in s)
+    sirtac = sumar_si(lambda s: re.search(r"sirtac|iibb|ingresos brutos", s) is not None)
+    debcred = sumar_si(lambda s: re.search(r"debito|credito|impuesto al cheque|ley 25413", s) is not None
+                       and not s.startswith("total"))
+
+    datos["f_iva"] = round(iva21 + iva105 + iva27, 2)
+    datos["f_ret"] = round(perc + sirtac + debcred, 2)
+    datos["f_desglose"] = {
+        "IVA 21%": iva21, "IVA 10,5%": iva105, "IVA 27%": iva27,
+        "Percepciones": perc, "SIRTAC / IIBB": sirtac, "Débitos y créditos": debcred,
+    }
+
+    neto = None
+    for i, s in enumerate(ll):
+        if re.search(r"^neto liquidado|total recibido|neto a (pagar|acreditar|cobrar)", s):
+            neto = importe_en(lineas[i])
+            if neto is None and i + 1 < len(lineas):
+                neto = importe_en(lineas[i + 1])
+            if neto is not None:
+                break
     if neto is not None:
-        datos["f_neto"] = neto
+        datos["f_neto"] = abs(neto)
     else:
         avisos.append("No se encontró el neto liquidado.")
 
@@ -313,12 +296,12 @@ def extraer_liquidacion_pdf(archivo):
             datos["f_plat"] = nombre
             break
 
+    m = COMP_RE.search(texto)
+    datos["f_comprobantes"] = [(m[1], m[2])] if m else []
     datos["f_filas"] = filas_por_fecha(texto)
-    datos["f_comprobantes"] = []
-    datos["f_facturas"] = []
 
     if {"f_bruto", "f_neto"} <= datos.keys():
-        deducc = sum(datos.get(k, 0) for k in ("f_com", "f_cf", "f_iva", "f_ret"))
+        deducc = datos["f_com"] + datos["f_cf"] + datos["f_iva"] + datos["f_ret"]
         dif = datos["f_bruto"] - deducc - datos["f_neto"]
         if abs(dif) > TOLERANCIA:
             avisos.append(f"El PDF no cierra: bruto − deducciones − neto da {fmt(dif)}. Revisa los importes.")
@@ -327,52 +310,8 @@ def extraer_liquidacion_pdf(archivo):
     return datos, avisos
 
 
-def vincular_liquidacion(liq_id):
-    """Vincula facturas ya importadas de AFIP a una liquidación guardada.
-    1) Por número de comprobante leído del PDF. 2) Si no hay, por día y monto."""
-    ids = set()
-    comp = consultar("SELECT pv, numero FROM liquidacion_comprobantes WHERE liquidacion_id=?", (liq_id,))
-    for r in comp.itertuples():
-        f = consultar(
-            """SELECT id FROM facturas
-               WHERE CAST(punto_venta AS INTEGER)=? AND CAST(numero AS INTEGER)=?
-                 AND id NOT IN (SELECT factura_id FROM liquidacion_factura)""",
-            (int(r.pv), int(r.numero)),
-        )
-        ids.update(f.id.tolist())
-    if not ids:
-        filas_db = consultar("SELECT fecha, monto FROM liquidacion_filas WHERE liquidacion_id=?", (liq_id,))
-        if not filas_db.empty:
-            filas = [
-                {"fecha": datetime.strptime(r.fecha, "%Y-%m-%d").date(), "monto": float(r.monto)}
-                for r in filas_db.itertuples()
-            ]
-            ids_dia, _ = cruzar_por_dia(filas)
-            ids.update(ids_dia)
-    for fid in ids:
-        ejecutar(
-            "INSERT OR IGNORE INTO liquidacion_factura (liquidacion_id, factura_id) VALUES (?,?)",
-            (liq_id, int(fid)),
-        )
-    return len(ids)
-
-
-def vincular_pendientes(usuario):
-    """Intenta vincular todas las liquidaciones que todavía no tienen factura."""
-    pend = consultar(
-        "SELECT id FROM liquidaciones WHERE id NOT IN (SELECT liquidacion_id FROM liquidacion_factura)"
-    )
-    total = 0
-    for liq_id in pend.id.tolist():
-        n = vincular_liquidacion(int(liq_id))
-        if n:
-            total += n
-            registrar("Vinculación automática", f"Liquidación #{liq_id}: {n} factura(s) vinculadas")
-    return total
-
-
-def guardar_liquidacion_auto(datos, usuario, nombre_pdf):
-    """Crea la liquidación a partir de los datos del PDF y vincula las facturas detectadas."""
+def guardar_liquidacion_pdf(datos, usuario, nombre_pdf):
+    """Guarda la liquidación tal cual está en el PDF. No vincula facturas (eso es otro paso)."""
     f_liq = datos.get("f_fliq") or date.today()
     bruto = datos.get("f_bruto", 0.0)
     com = datos.get("f_com", 0.0)
@@ -382,11 +321,6 @@ def guardar_liquidacion_auto(datos, usuario, nombre_pdf):
     esperado, _, estado = calcular(bruto, com, cf, iva, ret, None, None)
     plataforma = datos.get("f_plat", "Sin especificar")
     lote = datos.get("f_lote", "")
-    nota = f"Cargado desde PDF: {nombre_pdf}."
-    if not datos.get("f_facturas"):
-        nota += " Pendiente de vincular con AFIP."
-    if datos.get("f_neto"):
-        nota += f" Neto según PDF: {fmt(datos['f_neto'])}."
     liq_id = ejecutar(
         """INSERT INTO liquidaciones
            (plataforma, banco, nro_lote, fecha_liquidacion, periodo_desde, periodo_hasta,
@@ -397,50 +331,105 @@ def guardar_liquidacion_auto(datos, usuario, nombre_pdf):
         (
             plataforma, "", lote, f_liq.isoformat(), f_liq.isoformat(), f_liq.isoformat(),
             bruto, com, cf, iva, ret,
-            esperado, None, None, None, estado, nota,
+            esperado, None, None, None, estado, f"Cargado desde PDF: {nombre_pdf}.",
             usuario, ahora(), usuario, ahora(),
         ),
     )
+    ejecutar("INSERT OR REPLACE INTO liquidacion_pdf (liquidacion_id, neto_pdf) VALUES (?,?)",
+             (liq_id, datos.get("f_neto")))
+    for nombre_imp, monto in datos.get("f_desglose", {}).items():
+        if monto:
+            ejecutar("INSERT INTO liquidacion_impuestos (liquidacion_id, impuesto, monto) VALUES (?,?,?)",
+                     (liq_id, nombre_imp, monto))
     for f in datos.get("f_filas", []):
-        ejecutar(
-            "INSERT INTO liquidacion_filas (liquidacion_id, fecha, monto) VALUES (?,?,?)",
-            (liq_id, f["fecha"].isoformat(), f["monto"]),
-        )
+        ejecutar("INSERT INTO liquidacion_filas (liquidacion_id, fecha, monto) VALUES (?,?,?)",
+                 (liq_id, f["fecha"].isoformat(), f["monto"]))
     for pv, nro in datos.get("f_comprobantes", []):
-        ejecutar(
-            "INSERT INTO liquidacion_comprobantes (liquidacion_id, pv, numero) VALUES (?,?,?)",
-            (liq_id, pv, nro),
+        ejecutar("INSERT INTO liquidacion_comprobantes (liquidacion_id, pv, numero) VALUES (?,?,?)",
+                 (liq_id, pv, nro))
+    registrar("Liquidación cargada", f"#{liq_id} {plataforma} desde {nombre_pdf}")
+    return liq_id, estado
+
+
+# ======================= VINCULACIÓN CON AFIP =======================
+def cruzar_por_dia(filas):
+    """Por cada fila del PDF: facturas con fecha ±1 día cuya suma coincida con el monto."""
+    ids = set()
+    for fila in filas:
+        f = fila["fecha"].isoformat()
+        df = consultar(
+            """SELECT id, fecha, total FROM facturas
+               WHERE fecha BETWEEN date(?, '-1 day') AND date(?, '+1 day')
+                 AND id NOT IN (SELECT factura_id FROM liquidacion_factura)
+               ORDER BY ABS(julianday(fecha) - julianday(?))""",
+            (f, f, f),
         )
-    registrar("Liquidación automática", f"#{liq_id} {plataforma} desde {nombre_pdf}")
-    try:
-        n_vinc = vincular_liquidacion(liq_id)
-    except Exception:
-        n_vinc = 0
-    return liq_id, estado, n_vinc
+        cands = [(int(r.id), r.fecha, float(r.total)) for r in df.itertuples()][:12]
+        for k in range(1, min(4, len(cands)) + 1):
+            encontrado = None
+            for combo in combinations(cands, k):
+                if abs(sum(c[2] for c in combo) - fila["monto"]) <= TOLERANCIA:
+                    encontrado = combo
+                    break
+            if encontrado:
+                ids.update(c[0] for c in encontrado)
+                break
+    return sorted(ids)
 
 
-def selector_rango(key):
-    hoy = date.today()
-    c1, c2 = st.columns(2)
-    d = c1.date_input("Desde", value=date(hoy.year, 1, 1), key=f"{key}_d")
-    h = c2.date_input("Hasta", value=hoy, key=f"{key}_h")
-    return d.isoformat(), h.isoformat()
+def vincular_liquidacion(liq_id):
+    """1) Por número de comprobante del PDF. 2) Si no hay, por día y monto."""
+    ids = set()
+    comp = consultar("SELECT pv, numero FROM liquidacion_comprobantes WHERE liquidacion_id=?", (liq_id,))
+    for r in comp.itertuples():
+        f = consultar(
+            """SELECT id FROM facturas
+               WHERE CAST(punto_venta AS INTEGER)=? AND CAST(numero AS INTEGER)=?
+                 AND id NOT IN (SELECT factura_id FROM liquidacion_factura)""",
+            (int(r.pv), int(r.numero)),
+        )
+        ids.update(int(x) for x in f.id.tolist())
+    if not ids:
+        filas_db = consultar("SELECT fecha, monto FROM liquidacion_filas WHERE liquidacion_id=?", (liq_id,))
+        if not filas_db.empty:
+            filas = [
+                {"fecha": datetime.strptime(r.fecha, "%Y-%m-%d").date(), "monto": float(r.monto)}
+                for r in filas_db.itertuples()
+            ]
+            ids.update(cruzar_por_dia(filas))
+    for fid in ids:
+        ejecutar("INSERT OR IGNORE INTO liquidacion_factura (liquidacion_id, factura_id) VALUES (?,?)",
+                 (liq_id, int(fid)))
+    return len(ids)
+
+
+def vincular_pendientes():
+    pend = consultar(
+        """SELECT id, plataforma, nro_lote FROM liquidaciones
+           WHERE id NOT IN (SELECT liquidacion_id FROM liquidacion_factura)
+           ORDER BY fecha_liquidacion, id"""
+    )
+    resultados = []
+    for r in pend.itertuples():
+        n = vincular_liquidacion(int(r.id))
+        resultados.append({"Liquidación #": int(r.id), "Plataforma": r.plataforma,
+                           "Lote": r.nro_lote, "Facturas vinculadas": n})
+        if n:
+            registrar("Vinculación", f"Liquidación #{r.id}: {n} factura(s)")
+    return resultados
 
 
 # ======================= IMPORTACIÓN AFIP =======================
 def leer_afip(archivo):
-    """Lee el export de AFIP (CSV o XLSX) saltando cualquier fila de título."""
+    """Lee el export de AFIP saltando la fila de título hasta encontrar 'Fecha'."""
     archivo.seek(0)
     if archivo.name.lower().endswith("xlsx"):
         raw = pd.read_excel(archivo, header=None, dtype=str)
     else:
-        raw = pd.read_csv(
-            archivo, header=None, sep=None, engine="python",
-            dtype=str, encoding="utf-8-sig",
-        )
+        raw = pd.read_csv(archivo, header=None, sep=None, engine="python", dtype=str)
     inicio = next(
         i for i, fila in raw.iterrows()
-        if any(isinstance(x, str) and sin_acentos(x).strip().startswith("fecha") for x in fila)
+        if any(isinstance(x, str) and sin_acentos(x).strip() == "fecha" for x in fila)
     )
     df = raw.iloc[inicio + 1:].copy()
     df.columns = [str(x).strip() for x in raw.iloc[inicio]]
@@ -448,27 +437,18 @@ def leer_afip(archivo):
 
 
 def normalizar_afip(df):
-    """Encuentra las columnas del export de AFIP por el comienzo de su nombre."""
     cols = {sin_acentos(c).strip(): c for c in df.columns}
-
-    def buscar(*prefijos):
-        for p in prefijos:
-            for k, original in cols.items():
-                if k.startswith(p):
-                    return original
-        return None
-
     return {
-        "fecha": buscar("fecha de emision", "fecha"),
-        "tipo": buscar("tipo de comprobante"),
-        "pv": buscar("punto de venta"),
-        "numero": buscar("numero desde"),
-        "cuit": buscar("nro. doc. receptor", "nro doc receptor"),
-        "razon": buscar("denominacion receptor"),
-        "neto": buscar("imp. neto gravado total", "neto gravado total"),
-        "iva": buscar("total iva"),
-        "total": buscar("imp. total"),
-        "cae": buscar("cod. autorizacion", "cod autorizacion"),
+        "fecha": cols.get("fecha"),
+        "tipo": cols.get("tipo"),
+        "pv": cols.get("punto de venta"),
+        "numero": cols.get("numero desde"),
+        "cuit": cols.get("nro. doc. receptor"),
+        "razon": cols.get("denominacion receptor"),
+        "neto": cols.get("neto gravado total"),
+        "iva": cols.get("total iva"),
+        "total": cols.get("imp. total"),
+        "cae": cols.get("cod. autorizacion"),
     }
 
 
@@ -485,9 +465,7 @@ def importar_facturas(df_raw, usuario):
     nuevas = 0
     with closing(sqlite3.connect(DB_PATH, timeout=30)) as con:
         for _, r in df.iterrows():
-            fecha = pd.to_datetime(get(r, "fecha"), format="%Y-%m-%d", errors="coerce")
-            if pd.isna(fecha):
-                fecha = pd.to_datetime(get(r, "fecha"), dayfirst=True, errors="coerce")
+            fecha = pd.to_datetime(get(r, "fecha"), dayfirst=True, errors="coerce")
             if pd.isna(fecha):
                 continue
             cur = con.execute(
@@ -497,22 +475,130 @@ def importar_facturas(df_raw, usuario):
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     fecha.date().isoformat(),
-                    txt(get(r, "tipo")),
-                    txt(get(r, "pv")),
-                    txt(get(r, "numero")),
-                    txt(get(r, "cuit")),
-                    txt(get(r, "razon")),
-                    num(get(r, "neto")),
-                    num(get(r, "iva")),
-                    num(get(r, "total")),
-                    txt(get(r, "cae")),
-                    usuario,
-                    ahora(),
+                    txt(get(r, "tipo")), txt(get(r, "pv")), txt(get(r, "numero")),
+                    txt(get(r, "cuit")), txt(get(r, "razon")),
+                    num(get(r, "neto")), num(get(r, "iva")), num(get(r, "total")),
+                    txt(get(r, "cae")), usuario, ahora(),
                 ),
             )
             nuevas += cur.rowcount
         con.commit()
     return nuevas, len(df)
+
+
+# ======================= EXTRACTOS BANCARIOS =======================
+BANCOS_EXT = {
+    "banco naci": "Banco Nación", "galicia": "Banco Galicia", "santander": "Banco Santander",
+    "bbva": "BBVA", "macro": "Banco Macro", "credicoop": "Banco Credicoop", "ciudad": "Banco Ciudad",
+    "provincia": "Banco Provincia", "icbc": "ICBC", "brubank": "Brubank", "naranja": "Naranja X",
+    "mercado pago": "Mercado Pago",
+}
+
+
+def texto_de_archivo(archivo):
+    archivo.seek(0)
+    nombre = archivo.name.lower()
+    if nombre.endswith(".pdf"):
+        with pdfplumber.open(archivo) as pdf:
+            return "\n".join((p.extract_text() or "") for p in pdf.pages)
+    if nombre.endswith(".xlsx"):
+        df = pd.read_excel(archivo, header=None, dtype=str)
+        return "\n".join(" | ".join(str(x) for x in fila if pd.notna(x)) for fila in df.values.tolist())
+    return archivo.read().decode("utf-8-sig", errors="ignore")
+
+
+def movimientos_de_texto(texto):
+    movs = []
+    for linea in texto.splitlines():
+        f = FECHA_RE.search(linea)
+        if not f:
+            continue
+        montos = NUM_RE.findall(linea)
+        if not montos:
+            continue
+        try:
+            fecha = date(int(f[3]), int(f[2]), int(f[1]))
+        except ValueError:
+            continue
+        movs.append({"fecha": fecha, "descripcion": linea.strip()[:200], "monto": num(montos[-1])})
+    return movs
+
+
+def guardar_extracto(archivo, usuario):
+    texto = texto_de_archivo(archivo)
+    movs = movimientos_de_texto(texto)
+    tl = sin_acentos(texto)
+    banco = next((n for k, n in BANCOS_EXT.items() if k in tl), "No identificado")
+    desde = min((m["fecha"] for m in movs), default=None)
+    hasta = max((m["fecha"] for m in movs), default=None)
+    with closing(sqlite3.connect(DB_PATH, timeout=30)) as con:
+        cur = con.execute(
+            """INSERT INTO extractos (archivo, banco, periodo_desde, periodo_hasta, cargado_por, fecha_carga)
+               VALUES (?,?,?,?,?,?)""",
+            (archivo.name, banco,
+             desde.isoformat() if desde else None, hasta.isoformat() if hasta else None,
+             usuario, ahora()),
+        )
+        ext_id = cur.lastrowid
+        con.executemany(
+            "INSERT INTO extracto_movimientos (extracto_id, fecha, descripcion, monto) VALUES (?,?,?,?)",
+            [(ext_id, m["fecha"].isoformat(), m["descripcion"], m["monto"]) for m in movs],
+        )
+        con.commit()
+    registrar("Extracto cargado", f"{archivo.name} ({banco}, {len(movs)} movimientos)")
+    return len(movs), banco
+
+
+def conciliar(usuario):
+    """Para cada liquidación: factura − deducciones debe coincidir con un crédito del extracto,
+    y ese crédito debe coincidir con el neto de la liquidación."""
+    liqs = consultar(
+        """SELECT l.id, l.plataforma, l.nro_lote, l.fecha_liquidacion, l.bruto,
+               l.comision, l.costo_financiero, l.iva_comision, l.retenciones,
+               (SELECT COALESCE(SUM(f.total),0) FROM liquidacion_factura lf
+                  JOIN facturas f ON f.id = lf.factura_id WHERE lf.liquidacion_id = l.id) AS facturado,
+               (SELECT COUNT(*) FROM liquidacion_factura lf WHERE lf.liquidacion_id = l.id) AS n_fac,
+               (SELECT p.neto_pdf FROM liquidacion_pdf p WHERE p.liquidacion_id = l.id) AS neto_pdf
+           FROM liquidaciones l ORDER BY l.fecha_liquidacion, l.id"""
+    )
+    movs = consultar("SELECT rowid AS mid, fecha, descripcion, monto FROM extracto_movimientos")
+    usados, filas = set(), []
+    for L in liqs.itertuples():
+        ded = sum(float(x or 0) for x in (L.comision, L.costo_financiero, L.iva_comision, L.retenciones))
+        base = float(L.facturado) if L.n_fac > 0 else float(L.bruto or 0)
+        factura_menos_ded = round(base - ded, 2)
+        f_pago = date.fromisoformat(L.fecha_liquidacion) if L.fecha_liquidacion else None
+        acred, f_ac, estado = None, None, "Sin acreditación en extracto"
+        ventana = [
+            m for m in movs.itertuples()
+            if m.mid not in usados and (f_pago is None or abs((date.fromisoformat(m.fecha) - f_pago).days) <= 7)
+        ]
+        ok = next((m for m in ventana if abs(abs(m.monto) - factura_menos_ded) <= TOLERANCIA), None)
+        if ok is not None:
+            usados.add(ok.mid)
+            acred, f_ac, estado = float(ok.monto), ok.fecha, "Conciliada"
+        elif L.neto_pdf:
+            ok2 = next((m for m in ventana if abs(abs(m.monto) - float(L.neto_pdf)) <= TOLERANCIA), None)
+            if ok2 is not None:
+                usados.add(ok2.mid)
+                acred, f_ac, estado = float(ok2.monto), ok2.fecha, "Con diferencia"
+        dif = round(abs(acred) - factura_menos_ded, 2) if acred is not None else None
+        ejecutar(
+            """UPDATE liquidaciones SET neto_acreditado=?, fecha_acreditacion=?, diferencia=?, estado=?,
+               ultima_modif_por=?, ultima_modif=? WHERE id=?""",
+            (acred, f_ac, dif, estado, usuario, ahora(), int(L.id)),
+        )
+        filas.append({
+            "Liquidación #": int(L.id), "Plataforma": L.plataforma, "Lote": L.nro_lote,
+            "Fecha pago": L.fecha_liquidacion, "Facturado": base, "Deducciones": ded,
+            "Factura − deducciones": factura_menos_ded,
+            "Neto según PDF": float(L.neto_pdf) if L.neto_pdf else None,
+            "Acreditado en extracto": acred,
+            "Dif. vs factura − ded.": dif,
+            "Estado": estado,
+        })
+    registrar("Conciliación", f"Conciliadas {len(filas)} liquidaciones")
+    return pd.DataFrame(filas)
 
 
 # ======================= LOGIN =======================
@@ -537,17 +623,16 @@ if not st.session_state["usuario"]:
 
 usuario = st.session_state["usuario"]
 
-# ======================= SIDEBAR =======================
+# ======================= SIDEBAR Y MENÚ =======================
 st.sidebar.markdown(f"👤 **{usuario}**")
 if st.sidebar.button("🚪 Salir"):
     registrar("Salida", "Sesión cerrada")
     st.session_state["usuario"] = None
     st.rerun()
 
-# ======================= MENÚ ACORDEÓN EN EL LATERAL =======================
 SUBMENUS = {
     "📊 Ventas": ["Carga de Registro de Ventas"],
-    "💰 Tesorería": ["Liquidaciones", "Conciliación Bancaria"],
+    "💰 Tesorería": ["Liquidaciones", "Extractos Bancarios"],
     "📈 Contabilidad": [
         "Facturas vs neto final",
         "Facturas impagas tras cruce bancario",
@@ -577,12 +662,7 @@ for nombre, opciones in SUBMENUS.items():
         use_container_width=True,
     )
     if abierto:
-        st.sidebar.radio(
-            "Submenú:",
-            opciones,
-            key=f"sub_{nombre}",
-            label_visibility="collapsed",
-        )
+        st.sidebar.radio("Submenú:", opciones, key=f"sub_{nombre}", label_visibility="collapsed")
 
 st.title("Castillo de Oro")
 
@@ -591,13 +671,11 @@ if bloque is None:
     st.info("Haga clic en un módulo del menú lateral para desplegar sus opciones.")
     st.stop()
 
-if bloque == "📊 Ventas":
-    vista = SUBMENUS[bloque][0]
-else:
-    vista = st.session_state.get(f"sub_{bloque}", SUBMENUS[bloque][0])
+vista = SUBMENUS[bloque][0] if bloque == "📊 Ventas" else st.session_state.get(f"sub_{bloque}", SUBMENUS[bloque][0])
 
-# ---------- 1. VENTAS: CARGA DE REGISTRO ----------
-if vista == "Carga de Registro de Ventas":
+
+# ======================= 1. VENTAS =======================
+def vista_ventas():
     st.subheader("Importar facturas emitidas desde AFIP")
     st.caption("En AFIP: Mis Comprobantes → Emitidos → Exportar (CSV o XLSX).")
     archivo = st.file_uploader("Archivo de AFIP", type=["csv", "xlsx"], key="up_afip")
@@ -605,22 +683,10 @@ if vista == "Carga de Registro de Ventas":
         try:
             df = leer_afip(archivo)
             nuevas, total = importar_facturas(df, usuario)
-            n_vinc_afip = vincular_pendientes(usuario)
             registrar("Importación AFIP", f"{nuevas} facturas nuevas de {total} en {archivo.name}")
-            st.success(
-                f"Se incorporaron {nuevas} facturas nuevas. Facturas vinculadas automáticamente "
-                f"con liquidaciones pendientes: {n_vinc_afip}."
-            )
+            st.success(f"Se incorporaron {nuevas} facturas nuevas de {total} filas.")
         except Exception as e:
             st.error(f"No se pudo importar: {e}")
-
-    with st.expander("⚠️ Reiniciar facturas (usar si neto o IVA quedaron en 0)"):
-        st.caption("Borra las facturas importadas y sus vinculaciones. Después vuelve a subir el Excel de AFIP.")
-        if st.button("Borrar facturas y reimportar"):
-            ejecutar("DELETE FROM liquidacion_factura")
-            ejecutar("DELETE FROM facturas")
-            registrar("Reinicio", "Facturas borradas para reimportar desde AFIP")
-            st.success("Facturas borradas. Ahora sube de nuevo el Excel de AFIP.")
 
     st.markdown("#### Facturas cargadas")
     d, h = selector_rango("fact")
@@ -633,469 +699,244 @@ if vista == "Carga de Registro de Ventas":
     st.dataframe(facturas, hide_index=True)
 
 
-def vista_planilla():
-    st.subheader("Planilla de liquidaciones (hoja 2026)")
-    st.caption(
-        "Se completa sola al subir el PDF de cada liquidación en el formulario de abajo. "
-        "Es solo de lectura: no se edita a mano."
-    )
-    base = consultar("""SELECT id, fecha_liquidacion, plataforma, nro_lote, bruto, comision,
-               costo_financiero, iva_comision, retenciones, fecha_acreditacion, neto_acreditado
-        FROM liquidaciones ORDER BY fecha_liquidacion, id""")
-    facs = consultar("""SELECT lf.liquidacion_id AS id,
-               GROUP_CONCAT(f.tipo || ' ' || f.punto_venta || '-' || f.numero, ', ') AS facturas,
-               SUM(f.total) AS monto_fac
-        FROM liquidacion_factura lf JOIN facturas f ON f.id = lf.factura_id
-        GROUP BY lf.liquidacion_id""")
-    if base.empty:
-        st.info("Todavía no hay liquidaciones. Sube un PDF abajo para empezar.")
-        return
-    imp = consultar("""SELECT liquidacion_id AS id, impuesto, SUM(monto) AS monto
-        FROM liquidacion_impuestos GROUP BY liquidacion_id, impuesto""")
-    df = base.merge(facs, on="id", how="left")
-    if not imp.empty:
-        imp_p = imp.pivot(index="id", columns="impuesto", values="monto").reset_index()
-        df = df.merge(imp_p, on="id", how="left")
-    for col in ["IVA 21%", "IVA 10,5%", "IVA 27%", "SIRTAC / IIBB", "Percepciones", "Impuesto débitos y créditos"]:
-        if col not in df.columns:
-            df[col] = 0.0
-        df[col] = df[col].fillna(0.0)
-    df["facturas"] = df["facturas"].fillna("Sin factura vinculada")
-    df["monto_fac"] = df["monto_fac"].fillna(0.0)
-    df["ded"] = df.comision.fillna(0) + df.costo_financiero.fillna(0) + df.iva_comision.fillna(0) + df.retenciones.fillna(0)
-    df["esperado"] = df.bruto.fillna(0) - df.ded
-    df["control"] = (df.neto_acreditado - df.esperado).where(df.fecha_acreditacion.notna())
-    df["fecha_liquidacion"] = pd.to_datetime(df.fecha_liquidacion, errors="coerce").dt.date
-    df["fecha_acreditacion"] = pd.to_datetime(df.fecha_acreditacion, errors="coerce").dt.date
-
-    renombre = {
-        "id": "ID", "fecha_liquidacion": "FECHA LIQ.", "plataforma": "PLATAFORMA",
-        "nro_lote": "N° LIQUIDACION", "facturas": "FACTURAS", "monto_fac": "MONTO FAC.",
-        "bruto": "TT PRESENTADO", "comision": "ARANCEL", "costo_financiero": "FINANCIACION",
-        "iva_comision": "IVA", "IVA 21%": "IVA 21%", "IVA 10,5%": "IVA 10,5%", "IVA 27%": "IVA 27%",
-        "SIRTAC / IIBB": "SIRTAC / IIBB", "Percepciones": "PERCEPCIONES",
-        "Impuesto débitos y créditos": "DÉB. Y CRÉD.", "retenciones": "PER./SIRTAC/OTROS",
-        "ded": "TT DEDUCCIONES", "esperado": "ACREDITACION ESPERADA",
-        "fecha_acreditacion": "FECHA ACRED.", "neto_acreditado": "ACREDITADO BANCO",
-        "control": "CONTROL",
-    }
-    vista_df = df.rename(columns=renombre)[list(renombre.values())]
-
-    dinero = st.column_config.NumberColumn(format="$ %.2f")
-    st.dataframe(
-        vista_df,
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "FECHA LIQ.": st.column_config.DateColumn("FECHA LIQ.", format="DD/MM/YYYY"),
-            "FECHA ACRED.": st.column_config.DateColumn("FECHA ACRED.", format="DD/MM/YYYY"),
-            "TT PRESENTADO": dinero, "ARANCEL": dinero, "FINANCIACION": dinero,
-            "IVA": dinero, "IVA 21%": dinero, "IVA 10,5%": dinero, "IVA 27%": dinero,
-            "SIRTAC / IIBB": dinero, "PERCEPCIONES": dinero, "DÉB. Y CRÉD.": dinero,
-            "PER./SIRTAC/OTROS": dinero, "ACREDITADO BANCO": dinero,
-            "MONTO FAC.": dinero, "TT DEDUCCIONES": dinero,
-            "ACREDITACION ESPERADA": dinero, "CONTROL": dinero,
-        },
-    )
-
-    buf_p = BytesIO()
-    with pd.ExcelWriter(buf_p, engine="openpyxl") as w:
-        vista_df.to_excel(w, sheet_name="2026", index=False)
-    st.download_button(
-        "📥 Descargar planilla en Excel",
-        data=buf_p.getvalue(),
-        file_name="planilla_liquidaciones_2026.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-
-# ---------- 2. TESORERÍA: LIQUIDACIONES ----------
-if vista == "Liquidaciones":
-    sub_liq = st.radio(
-        "Sección de Liquidaciones:",
-        ["📊 Planilla (Excel)", "📤 Cargar liquidación"],
-        horizontal=True,
-        key="sub_liq",
-    )
-
-if vista == "Liquidaciones" and sub_liq == "📊 Planilla (Excel)":
-    vista_planilla()
-
-if vista == "Liquidaciones" and sub_liq == "📤 Cargar liquidación":
-    st.subheader("1. Subir PDF de la liquidación (automático)")
-    st.caption(
-        "Sube el PDF de la liquidación. La app lee los importes, busca la factura de AFIP "
-        "(por número de comprobante o por monto) y guarda la liquidación ya vinculada."
-    )
+# ======================= 2. TESORERÍA: LIQUIDACIONES =======================
+def liq_carga():
+    st.subheader("Carga de liquidación")
+    st.caption("Sube el PDF de la liquidación y pulsa Cargar. Se guarda tal como viene en el PDF.")
     pdf_liq = st.file_uploader("PDF de liquidación", type=["pdf"], key="up_pdf_liq")
-    if pdf_liq is not None and st.button("Procesar PDF y vincular factura", type="primary"):
+    if pdf_liq is not None and st.button("Cargar", type="primary"):
         try:
             datos, avisos = extraer_liquidacion_pdf(pdf_liq)
             lote = datos.get("f_lote", "")
-            ya = consultar(
-                "SELECT id FROM liquidaciones WHERE nro_lote = ? AND nro_lote != ''", (lote,)
-            ) if lote else pd.DataFrame()
+            ya = consultar("SELECT id FROM liquidaciones WHERE nro_lote = ? AND nro_lote != ''", (lote,)) if lote else pd.DataFrame()
             if not datos.get("f_bruto"):
-                st.error("No se encontró el bruto en el PDF. Usa la carga manual de abajo.")
-                with st.expander("Ver texto que la app leyó del PDF (para ajustar la lectura)"):
+                st.error("No se encontró el bruto en el PDF. No se guardó nada.")
+                with st.expander("Texto leído del PDF"):
                     st.text(datos.get("f_texto", ""))
             elif not ya.empty:
-                st.warning(f"Ya existe una liquidación con el lote {lote} (#{int(ya.id.iloc[0])}). No se duplicó.")
+                st.warning(f"Ya existe la liquidación {lote} (#{int(ya.id.iloc[0])}). No se duplicó.")
             else:
-                liq_id, estado, n_vinc = guardar_liquidacion_auto(datos, usuario, pdf_liq.name)
-                st.success(
-                    f"Liquidación #{liq_id} guardada. Facturas vinculadas: {n_vinc}. Estado: {estado}."
-                )
+                liq_id, estado = guardar_liquidacion_pdf(datos, usuario, pdf_liq.name)
+                st.success(f"Liquidación #{liq_id} cargada. Estado: {estado}.")
                 for a in avisos:
                     st.warning(a)
         except Exception as e:
             st.error(f"No se pudo procesar el PDF: {e}")
             st.code(traceback.format_exc())
 
-    if st.button("Re-intentar vincular liquidaciones pendientes"):
-        n_pend = vincular_pendientes(usuario)
-        st.success(f"Facturas vinculadas: {n_pend}.")
-
-    st.subheader("2. Carga manual (solo si el PDF no se pudo leer)")
-    facs = consultar("SELECT id, fecha, tipo, punto_venta, numero, total FROM facturas ORDER BY fecha DESC")
-    opciones_fac = {
-        int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {fmt(r.total)}"
-        for r in facs.itertuples()
-    }
-    with st.form("form_liq", clear_on_submit=True):
-        c1, c2, c3 = st.columns(3)
-        plat = c1.text_input("Plataforma / tarjeta / POS (escribir libremente)", key="f_plat")
-        banco = c2.text_input("Banco / cuenta de destino", key="f_banco")
-        lote = c2.text_input("Nro. de lote / liquidación", key="f_lote")
-        f_liq = c3.date_input("Fecha de liquidación", value=None, key="f_fliq")
-        p_desde = c3.date_input("Período desde", value=date.today())
-        p_hasta = c1.date_input("Período hasta", value=date.today())
-        bruto = c2.number_input("Bruto liquidado", min_value=0.0, step=100.0, format="%.2f", key="f_bruto")
-        com = c3.number_input("Comisiones / arancel", min_value=0.0, step=100.0, format="%.2f", key="f_com")
-        cf = c1.number_input("Costo financiero / cuotas", min_value=0.0, step=100.0, format="%.2f", key="f_cf")
-        iva_com = c2.number_input("IVA s/ comisiones", min_value=0.0, step=100.0, format="%.2f", key="f_iva")
-        ret = c3.number_input("Retenciones / percepciones", min_value=0.0, step=100.0, format="%.2f", key="f_ret")
-        neto_acred = c1.number_input("Neto acreditado (si ya llegó)", min_value=0.0, step=100.0, format="%.2f", key="f_neto")
-        f_acred = c2.date_input("Fecha de acreditación (si ya llegó)", value=None)
-        st.markdown("**Desglose de impuestos (para declaraciones juradas)**")
-        i1, i2, i3 = st.columns(3)
-        imp_iva21 = i1.number_input("IVA 21 %", min_value=0.0, step=100.0, format="%.2f", key="imp_iva21")
-        imp_iva105 = i2.number_input("IVA 10,5 %", min_value=0.0, step=100.0, format="%.2f", key="imp_iva105")
-        imp_iva27 = i3.number_input("IVA 27 %", min_value=0.0, step=100.0, format="%.2f", key="imp_iva27")
-        imp_sirtac = i1.number_input("SIRTAC / IIBB", min_value=0.0, step=100.0, format="%.2f", key="imp_sirtac")
-        imp_perc = i2.number_input("Percepciones (IVA, IIBB, otras)", min_value=0.0, step=100.0, format="%.2f", key="imp_perc")
-        imp_debcred = i3.number_input("Impuesto débitos y créditos", min_value=0.0, step=100.0, format="%.2f", key="imp_debcred")
-        notas = st.text_area("Notas")
-        vinc = st.multiselect(
-            "Facturas relacionadas",
-            options=list(opciones_fac),
-            format_func=lambda i: opciones_fac[i],
-        )
-        guardar = st.form_submit_button("Guardar liquidación", type="primary")
-
-    if guardar:
-        f_liq = f_liq or date.today()
-        if bruto <= 0:
-            st.error("El bruto liquidado debe ser mayor a cero.")
-        else:
-            plataforma = plat.strip() or "Sin especificar"
-            f_acred_iso = f_acred.isoformat() if f_acred else None
-            esperado, dif, estado = calcular(bruto, com, cf, iva_com, ret, neto_acred, f_acred_iso)
-            liq_id = ejecutar(
-                """INSERT INTO liquidaciones
-                   (plataforma, banco, nro_lote, fecha_liquidacion, periodo_desde, periodo_hasta,
-                    bruto, comision, costo_financiero, iva_comision, retenciones,
-                    neto_esperado, neto_acreditado, fecha_acreditacion, diferencia, estado, notas,
-                    cargado_por, fecha_carga, ultima_modif_por, ultima_modif)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    plataforma, banco, lote, f_liq.isoformat(),
-                    p_desde.isoformat(), p_hasta.isoformat(),
-                    bruto, com, cf, iva_com, ret,
-                    esperado, neto_acred if f_acred_iso else None, f_acred_iso, dif, estado, notas,
-                    usuario, ahora(), usuario, ahora(),
-                ),
-            )
-            for fid in vinc:
-                ejecutar(
-                    "INSERT OR IGNORE INTO liquidacion_factura (liquidacion_id, factura_id) VALUES (?,?)",
-                    (liq_id, fid),
-                )
-            for nombre_imp, monto_imp in [
-                ("IVA 21%", imp_iva21), ("IVA 10,5%", imp_iva105), ("IVA 27%", imp_iva27),
-                ("SIRTAC / IIBB", imp_sirtac), ("Percepciones", imp_perc),
-                ("Impuesto débitos y créditos", imp_debcred),
-            ]:
-                if monto_imp:
-                    ejecutar(
-                        "INSERT INTO liquidacion_impuestos (liquidacion_id, impuesto, monto) VALUES (?,?,?)",
-                        (liq_id, nombre_imp, monto_imp),
-                    )
-            registrar("Liquidación", f"#{liq_id} {plataforma} por {fmt(bruto)} ({estado})")
-            st.success(f"Liquidación #{liq_id} guardada. Estado: {estado}.")
-
-    st.markdown("#### Liquidaciones registradas")
+    st.markdown("#### Liquidaciones cargadas")
     d2, h2 = selector_rango("liq")
-    busq = st.text_input("Buscar por plataforma, banco o lote")
     liqs = consultar(
-        """SELECT id, plataforma, banco, nro_lote, fecha_liquidacion, bruto, comision,
-                  costo_financiero, iva_comision, retenciones, neto_esperado,
-                  neto_acreditado, fecha_acreditacion, diferencia, estado, cargado_por
-           FROM liquidaciones WHERE fecha_liquidacion BETWEEN ? AND ? ORDER BY fecha_liquidacion DESC""",
+        """SELECT id, plataforma, nro_lote, fecha_liquidacion, bruto, comision,
+                  costo_financiero, iva_comision, retenciones, estado
+           FROM liquidaciones WHERE fecha_liquidacion BETWEEN ? AND ?
+           ORDER BY fecha_liquidacion DESC""",
         (d2, h2),
     )
-    if busq:
-        mask = liqs.apply(
-            lambda c: c.astype(str).str.contains(busq, case=False, na=False)
-        ).any(axis=1)
-        liqs = liqs[mask]
     st.dataframe(liqs, hide_index=True)
 
-# ---------- 3. TESORERÍA: CONCILIACIÓN ----------
-if vista == "Conciliación Bancaria":
-    st.subheader("Registrar acreditación bancaria")
-    pend = consultar(
-        """SELECT id, plataforma, nro_lote, neto_esperado FROM liquidaciones
-           WHERE fecha_acreditacion IS NULL ORDER BY fecha_liquidacion"""
-    )
-    if pend.empty:
-        st.info("No hay liquidaciones pendientes de acreditación.")
-    else:
-        etiquetas = {
-            int(r.id): f"#{int(r.id)} · {r.plataforma} · lote {r.nro_lote or '-'} · esperado {fmt(r.neto_esperado)}"
-            for r in pend.itertuples()
-        }
-        idsel = st.selectbox("Liquidación pendiente", list(etiquetas), format_func=etiquetas.get)
-        with st.form("form_acred"):
-            n_acred = st.number_input("Neto acreditado en banco", min_value=0.0, step=100.0, format="%.2f")
-            f_ac = st.date_input("Fecha de acreditación", value=date.today())
-            ok = st.form_submit_button("Registrar acreditación", type="primary")
-        if ok:
-            liq = consultar("SELECT * FROM liquidaciones WHERE id=?", (idsel,)).iloc[0]
-            esperado, dif, estado = calcular(
-                liq.bruto, liq.comision, liq.costo_financiero,
-                liq.iva_comision, liq.retenciones, n_acred, f_ac.isoformat(),
-            )
-            ejecutar(
-                """UPDATE liquidaciones SET neto_acreditado=?, fecha_acreditacion=?,
-                   neto_esperado=?, diferencia=?, estado=?, ultima_modif_por=?, ultima_modif=?
-                   WHERE id=?""",
-                (n_acred, f_ac.isoformat(), esperado, dif, estado, usuario, ahora(), int(idsel)),
-            )
-            registrar("Acreditación", f"#{idsel}: acreditado {fmt(n_acred)} ({estado})")
-            st.success(f"Acreditación registrada. Estado: {estado}.")
 
-    st.subheader("Vincular facturas a una liquidación")
-    todas = consultar("SELECT id, plataforma, nro_lote, bruto FROM liquidaciones ORDER BY id DESC")
-    sin = consultar(
-        """SELECT id, fecha, tipo, punto_venta, numero, total FROM facturas
-           WHERE id NOT IN (SELECT factura_id FROM liquidacion_factura) ORDER BY fecha DESC"""
-    )
-    if todas.empty or sin.empty:
-        st.info("Se necesitan liquidaciones y facturas sin vincular.")
-    else:
-        liq_sel = st.selectbox(
-            "Liquidación",
-            todas.id.tolist(),
-            format_func=lambda i: f"#{i} · {todas.set_index('id').loc[i, 'plataforma']} · {fmt(todas.set_index('id').loc[i, 'bruto'])}",
-        )
-        fac_sel = st.multiselect(
-            "Facturas sin vincular",
-            sin.id.tolist(),
-            format_func=lambda i: f"{sin.set_index('id').loc[i, 'fecha']} | {sin.set_index('id').loc[i, 'numero']} | {fmt(sin.set_index('id').loc[i, 'total'])}",
-        )
-        if st.button("Vincular facturas"):
-            for fid in fac_sel:
-                ejecutar(
-                    "INSERT OR IGNORE INTO liquidacion_factura (liquidacion_id, factura_id) VALUES (?,?)",
-                    (int(liq_sel), int(fid)),
-                )
-            registrar("Vinculación", f"Liquidación #{liq_sel} ← {len(fac_sel)} factura(s)")
-            st.success("Facturas vinculadas.")
-
-    st.subheader("Control: bruto liquidado vs. facturas vinculadas")
-    control = consultar(
-        """SELECT l.id, l.plataforma, l.fecha_liquidacion, l.bruto,
-                  COALESCE(SUM(f.total), 0) AS facturado,
-                  l.bruto - COALESCE(SUM(f.total), 0) AS diferencia_bruto
-           FROM liquidaciones l
-           LEFT JOIN liquidacion_factura lf ON lf.liquidacion_id = l.id
-           LEFT JOIN facturas f ON f.id = lf.factura_id
-           GROUP BY l.id ORDER BY l.fecha_liquidacion DESC"""
-    )
-    st.dataframe(control, hide_index=True)
-
-# ---------- 4. CONTABILIDAD: INFORMES ----------
-# Informe 1: facturas vs neto final
-if vista == "Facturas vs neto final":
-    st.subheader("Facturas vs. lo que quedó después de impuestos, intereses y tasas")
-    d4, h4 = selector_rango("r1")
-    r1 = consultar(
-        """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total AS facturado,
-                  l.id AS liquidacion_id, l.plataforma, l.bruto, l.comision, l.costo_financiero,
-                  l.iva_comision, l.retenciones, l.neto_esperado, l.neto_acreditado, l.estado,
-                  (SELECT COALESCE(SUM(f2.total),0) FROM liquidacion_factura lf2
-                     JOIN facturas f2 ON f2.id = lf2.factura_id
-                     WHERE lf2.liquidacion_id = l.id) AS total_liq_facturas
-           FROM facturas f
-           JOIN liquidacion_factura lf ON lf.factura_id = f.id
+def liq_vinculacion():
+    st.subheader("Vinculación de comprobantes")
+    st.caption("Cruza las liquidaciones cargadas con las facturas de AFIP ya importadas.")
+    if st.button("Vincular factura", type="primary"):
+        res = vincular_pendientes()
+        if res:
+            st.dataframe(pd.DataFrame(res), hide_index=True)
+        else:
+            st.info("No hay liquidaciones pendientes de vincular.")
+    st.markdown("#### Comprobantes vinculados")
+    vinc = consultar(
+        """SELECT l.id AS liquidacion, l.plataforma, l.nro_lote, f.fecha, f.tipo,
+                  f.punto_venta, f.numero, f.razon_social, f.total
+           FROM liquidacion_factura lf
            JOIN liquidaciones l ON l.id = lf.liquidacion_id
-           WHERE f.fecha BETWEEN ? AND ?
-           ORDER BY f.fecha""",
-        (d4, h4),
+           JOIN facturas f ON f.id = lf.factura_id
+           ORDER BY l.id, f.fecha"""
     )
-    if r1.empty:
-        st.info("No hay facturas vinculadas a liquidaciones en el rango.")
-    else:
-        r1["peso"] = r1.facturado / r1.total_liq_facturas
-        r1["deducciones"] = r1.peso * (r1.comision + r1.costo_financiero + r1.iva_comision + r1.retenciones)
-        r1["neto_final"] = r1.peso * r1.neto_acreditado.fillna(r1.neto_esperado)
-        r1["factura"] = r1.tipo + " " + r1.punto_venta.astype(str) + "-" + r1.numero.astype(str)
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Facturado", fmt(r1.facturado.sum()))
-        m2.metric("Descuentos (impuestos, intereses, tasas)", fmt(r1.deducciones.sum()))
-        m3.metric("Neto final recibido", fmt(r1.neto_final.sum()))
-        tabla1 = r1[["fecha", "factura", "razon_social", "plataforma", "facturado", "deducciones", "neto_final", "estado"]]
-        st.dataframe(tabla1, hide_index=True)
+    st.dataframe(vinc, hide_index=True)
 
-# Informe 2: facturas impagas después del cruce con el banco
-if vista == "Facturas impagas tras cruce bancario":
-    st.subheader("Facturas sin acreditación bancaria confirmada")
-    d5, h5 = selector_rango("r2")
-    r2 = consultar(
-        """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total
-           FROM facturas f
-           WHERE f.fecha BETWEEN ? AND ?
-             AND f.id NOT IN (
+
+def liq_planilla():
+    st.subheader("Planilla de liquidaciones por comprobante")
+    st.caption("Una fila por factura. Las deducciones de cada liquidación se reparten según el peso de la factura.")
+    df = consultar(
+        """SELECT l.id AS liq, l.plataforma, l.nro_lote, l.fecha_liquidacion, l.fecha_acreditacion,
+                  l.neto_acreditado, l.comision, l.costo_financiero, l.iva_comision, l.retenciones,
+                  f.fecha AS fecha_fac, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total,
+                  (SELECT SUM(f2.total) FROM liquidacion_factura lf2 JOIN facturas f2 ON f2.id = lf2.factura_id
+                    WHERE lf2.liquidacion_id = l.id) AS tot_liq
+           FROM liquidacion_factura lf
+           JOIN liquidaciones l ON l.id = lf.liquidacion_id
+           JOIN facturas f ON f.id = lf.factura_id
+           ORDER BY f.fecha, l.id"""
+    )
+    if df.empty:
+        st.info("Todavía no hay comprobantes vinculados. Usa 'Vincular factura' primero.")
+        return
+    imp = consultar("SELECT liquidacion_id, impuesto, SUM(monto) AS monto FROM liquidacion_impuestos GROUP BY liquidacion_id, impuesto")
+    imp_p = imp.pivot(index="liquidacion_id", columns="impuesto", values="monto").fillna(0) if not imp.empty else pd.DataFrame()
+    peso = df.total / df.tot_liq
+    out = pd.DataFrame({
+        "FECHA FAC.": pd.to_datetime(df.fecha_fac).dt.strftime("%d/%m/%Y"),
+        "COMPROBANTE": df.tipo + " " + df.punto_venta.astype(str) + "-" + df.numero.astype(str),
+        "CLIENTE": df.razon_social,
+        "MONTO FACTURA": df.total,
+        "LIQ. N°": df.liq,
+        "PLATAFORMA": df.plataforma,
+        "ARANCEL": df.comision * peso,
+        "INTERÉS / FINANCIACIÓN": df.costo_financiero * peso,
+    })
+    for col in ["IVA 21%", "IVA 10,5%", "IVA 27%"]:
+        out[col] = (df.liq.map(imp_p[col]) if (not imp_p.empty and col in imp_p) else 0) * peso
+    for col, etiqueta in [("Percepciones", "PERCEPCIONES"), ("SIRTAC / IIBB", "SIRTAC / IIBB"),
+                          ("Impuesto débitos y créditos", "DÉB. Y CRÉD.")]:
+        out[etiqueta] = (df.liq.map(imp_p[col]) if (not imp_p.empty and col in imp_p) else 0) * peso
+    out["TOTAL DEDUCCIONES"] = (df.comision + df.costo_financiero + df.iva_comision + df.retenciones) * peso
+    out["NETO PARA ESTA VENTA"] = df.total - out["TOTAL DEDUCCIONES"]
+    out["FECHA ACRED."] = df.fecha_acreditacion
+    out["ACREDITADO BANCO"] = df.neto_acreditado * peso
+    st.dataframe(out.round(2), hide_index=True, use_container_width=True)
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        out.round(2).to_excel(w, sheet_name="2026", index=False)
+    st.download_button(
+        "📥 Descargar planilla en Excel", data=buf.getvalue(),
+        file_name="planilla_liquidaciones.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ======================= 2b. TESORERÍA: EXTRACTOS =======================
+def ext_carga():
+    st.subheader("Carga de extractos")
+    archivo = st.file_uploader("Extracto bancario (PDF, CSV o XLSX)", type=["pdf", "csv", "xlsx"], key="up_ext")
+    if archivo is not None and st.button("Guardar", type="primary"):
+        try:
+            n, banco = guardar_extracto(archivo, usuario)
+            st.success(f"Extracto guardado: {n} movimientos detectados ({banco}).")
+        except Exception as e:
+            st.error(f"No se pudo guardar el extracto: {e}")
+    st.markdown("#### Extractos guardados")
+    exts = consultar(
+        """SELECT e.id, e.archivo, e.banco, e.periodo_desde, e.periodo_hasta,
+                  (SELECT COUNT(*) FROM extracto_movimientos m WHERE m.extracto_id = e.id) AS movimientos
+           FROM extractos e ORDER BY e.id DESC"""
+    )
+    st.dataframe(exts, hide_index=True)
+
+
+def ext_conciliacion():
+    st.subheader("Conciliación")
+    st.caption("Por cada liquidación: factura − deducciones debe coincidir con lo acreditado en el extracto.")
+    if st.button("Conciliar", type="primary"):
+        st.session_state["resultado_conc"] = conciliar(usuario)
+    if "resultado_conc" in st.session_state:
+        res = st.session_state["resultado_conc"]
+        if res.empty:
+            st.info("No hay liquidaciones para conciliar.")
+        else:
+            st.dataframe(res.round(2), hide_index=True, use_container_width=True)
+
+
+def vista_liquidaciones():
+    st.markdown("## 💰 Tesorería - Liquidaciones")
+    sub = st.radio("Sección:", ["Carga de liquidación", "Vinculación de comprobantes", "Planilla Excel"],
+                   horizontal=True, key="sub_liq")
+    if sub == "Carga de liquidación":
+        liq_carga()
+    elif sub == "Vinculación de comprobantes":
+        liq_vinculacion()
+    else:
+        liq_planilla()
+
+
+def vista_extractos():
+    st.markdown("## 💰 Tesorería - Extractos Bancarios")
+    sub = st.radio("Sección:", ["Carga de extractos", "Conciliación"], horizontal=True, key="sub_ext")
+    if sub == "Carga de extractos":
+        ext_carga()
+    else:
+        ext_conciliacion()
+
+
+# ======================= 3. CONTABILIDAD =======================
+def vista_contabilidad(nombre):
+    st.markdown(f"## 📈 Contabilidad - {nombre}")
+    if nombre == "Facturas vs neto final":
+        d4, h4 = selector_rango("r1")
+        r1 = consultar(
+            """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total AS facturado,
+                      l.plataforma, l.comision, l.costo_financiero, l.iva_comision, l.retenciones,
+                      l.neto_acreditado, l.neto_esperado, l.estado,
+                      (SELECT COALESCE(SUM(f2.total),0) FROM liquidacion_factura lf2
+                         JOIN facturas f2 ON f2.id = lf2.factura_id WHERE lf2.liquidacion_id = l.id) AS tot
+               FROM facturas f
+               JOIN liquidacion_factura lf ON lf.factura_id = f.id
+               JOIN liquidaciones l ON l.id = lf.liquidacion_id
+               WHERE f.fecha BETWEEN ? AND ? ORDER BY f.fecha""",
+            (d4, h4),
+        )
+        if r1.empty:
+            st.info("No hay facturas vinculadas en el rango.")
+        else:
+            p = r1.facturado / r1.tot
+            r1["descuentos"] = p * (r1.comision + r1.costo_financiero + r1.iva_comision + r1.retenciones)
+            r1["neto_final"] = p * r1.neto_acreditado.fillna(r1.neto_esperado)
+            r1["factura"] = r1.tipo + " " + r1.punto_venta.astype(str) + "-" + r1.numero.astype(str)
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Facturado", fmt(r1.facturado.sum()))
+            m2.metric("Descuentos", fmt(r1.descuentos.sum()))
+            m3.metric("Neto final", fmt(r1.neto_final.sum()))
+            st.dataframe(r1[["fecha", "factura", "razon_social", "plataforma", "facturado", "descuentos", "neto_final", "estado"]], hide_index=True)
+    elif nombre == "Facturas impagas tras cruce bancario":
+        d5, h5 = selector_rango("r2")
+        r2 = consultar(
+            """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total FROM facturas f
+               WHERE f.fecha BETWEEN ? AND ? AND f.id NOT IN (
                  SELECT lf.factura_id FROM liquidacion_factura lf
-                 JOIN liquidaciones l ON l.id = lf.liquidacion_id
-                 WHERE l.fecha_acreditacion IS NOT NULL)
-           ORDER BY f.fecha""",
-        (d5, h5),
-    )
-    st.metric("Total impago", fmt(r2.total.sum() if not r2.empty else 0))
-    if r2.empty:
-        st.success("No hay facturas impagas en el rango.")
-    else:
+                 JOIN liquidaciones l ON l.id = lf.liquidacion_id WHERE l.estado = 'Conciliada')
+               ORDER BY f.fecha""",
+            (d5, h5),
+        )
+        st.metric("Total impago", fmt(r2.total.sum() if not r2.empty else 0))
         st.dataframe(r2, hide_index=True)
-
-# Informe 3: impuestos por liquidación, para declaraciones juradas
-if vista == "Impuestos para DDJJ":
-    st.subheader("Impuestos retenidos por liquidación (para DDJJ)")
-    d6, h6 = selector_rango("r3")
-    det = consultar(
-        """SELECT l.id AS nro_liquidacion, l.fecha_liquidacion, l.plataforma, l.nro_lote,
-                  COALESCE((SELECT GROUP_CONCAT(f.tipo || ' ' || f.punto_venta || '-' || f.numero, ', ')
-                            FROM liquidacion_factura lf JOIN facturas f ON f.id = lf.factura_id
-                            WHERE lf.liquidacion_id = l.id), '') AS facturas,
-                  li.impuesto, li.monto
-           FROM liquidacion_impuestos li
-           JOIN liquidaciones l ON l.id = li.liquidacion_id
-           WHERE l.fecha_liquidacion BETWEEN ? AND ?
-           ORDER BY l.fecha_liquidacion, l.id""",
-        (d6, h6),
-    )
-    if det.empty:
-        st.info("No hay impuestos desglosados en el rango. Cárgalos en el formulario de Liquidaciones.")
+    elif nombre == "Impuestos para DDJJ":
+        d6, h6 = selector_rango("r3")
+        det = consultar(
+            """SELECT l.id AS liquidacion, l.fecha_liquidacion, l.plataforma, li.impuesto, li.monto
+               FROM liquidacion_impuestos li JOIN liquidaciones l ON l.id = li.liquidacion_id
+               WHERE l.fecha_liquidacion BETWEEN ? AND ? ORDER BY l.fecha_liquidacion""",
+            (d6, h6),
+        )
+        if det.empty:
+            st.info("No hay impuestos desglosados en el rango.")
+        else:
+            st.metric("Total impuestos", fmt(det.monto.sum()))
+            por_tipo = det.groupby("impuesto", as_index=False).monto.sum()
+            st.dataframe(por_tipo, hide_index=True)
+            st.dataframe(det.pivot_table(index=["liquidacion", "fecha_liquidacion", "plataforma"],
+                                         columns="impuesto", values="monto", aggfunc="sum", fill_value=0).reset_index(),
+                         hide_index=True)
     else:
-        st.metric("Total impuestos recaudados", fmt(det.monto.sum()))
-        st.markdown("#### Total por tipo de impuesto")
-        por_tipo = det.groupby("impuesto", as_index=False).monto.sum().sort_values("monto", ascending=False)
-        st.dataframe(por_tipo, hide_index=True)
-        st.markdown("#### Detalle por liquidación")
-        det["facturas"] = det.facturas.fillna("")
-        piv = det.pivot_table(
-            index=["nro_liquidacion", "fecha_liquidacion", "plataforma", "nro_lote", "facturas"],
-            columns="impuesto", values="monto", aggfunc="sum", fill_value=0,
-        ).reset_index()
-        st.dataframe(piv, hide_index=True)
-        buf3 = BytesIO()
-        with pd.ExcelWriter(buf3, engine="openpyxl") as w:
-            por_tipo.to_excel(w, sheet_name="Total por impuesto", index=False)
-            piv.to_excel(w, sheet_name="Detalle por liquidacion", index=False)
-        st.download_button(
-            "📥 Descargar impuestos para DDJJ",
-            data=buf3.getvalue(),
-            file_name=f"impuestos_ddjj_{d6}_{h6}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-        )
+        d3, h3 = selector_rango("inf")
+        liq = consultar("SELECT * FROM liquidaciones WHERE fecha_liquidacion BETWEEN ? AND ?", (d3, h3))
+        if liq.empty:
+            st.info("No hay liquidaciones en el rango.")
+        else:
+            liq["deducciones"] = liq.comision + liq.costo_financiero + liq.iva_comision + liq.retenciones
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Bruto", fmt(liq.bruto.sum()))
+            k2.metric("Deducciones", fmt(liq.deducciones.sum()))
+            k3.metric("Neto acreditado", fmt(liq.neto_acreditado.sum()))
+            st.dataframe(liq.groupby("plataforma")[["bruto", "deducciones", "neto_acreditado"]].sum().reset_index(), hide_index=True)
 
-# Informe general
-if vista == "Resumen general":
-    st.subheader("Informes para la toma de decisiones")
-    d3, h3 = selector_rango("inf")
-    plats_db = consultar("SELECT DISTINCT plataforma FROM liquidaciones ORDER BY plataforma")
-    plats = st.multiselect("Plataformas (vacío = todas)", plats_db.plataforma.tolist())
 
-    liq = consultar("SELECT * FROM liquidaciones WHERE fecha_liquidacion BETWEEN ? AND ?", (d3, h3))
-    if plats:
-        liq = liq[liq.plataforma.isin(plats)]
-
-    if liq.empty:
-        st.info("No hay liquidaciones en el rango seleccionado.")
-    else:
-        liq["deducciones"] = liq.comision + liq.costo_financiero + liq.iva_comision + liq.retenciones
-        pendientes = liq[liq.fecha_acreditacion.isna()]
-
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Bruto liquidado", fmt(liq.bruto.sum()))
-        k2.metric("Deducciones", fmt(liq.deducciones.sum()))
-        k3.metric("Neto acreditado", fmt(liq.neto_acreditado.sum()))
-        k4.metric("Pendiente de acreditar", fmt(pendientes.neto_esperado.sum()))
-        tasa = (liq.deducciones.sum() / liq.bruto.sum() * 100) if liq.bruto.sum() else 0
-        k5.metric("Costo efectivo promedio", f"{tasa:,.2f} %".replace(",", "X").replace(".", ",").replace("X", "."))
-
-        resumen = (
-            liq.groupby("plataforma")
-            .agg(
-                liquidaciones=("id", "count"),
-                bruto=("bruto", "sum"),
-                deducciones=("deducciones", "sum"),
-                neto_esperado=("neto_esperado", "sum"),
-                neto_acreditado=("neto_acreditado", "sum"),
-            )
-            .reset_index()
-        )
-        resumen["costo_efectivo_%"] = (resumen.deducciones / resumen.bruto * 100).round(2)
-
-        st.markdown("#### Resumen por plataforma")
-        st.dataframe(resumen, hide_index=True)
-        st.bar_chart(resumen.set_index("plataforma")[["bruto", "neto_acreditado"]])
-
-        st.markdown("#### Detalle de deducciones")
-        ded = liq.groupby("plataforma")[["comision", "costo_financiero", "iva_comision", "retenciones"]].sum().reset_index()
-        st.dataframe(ded, hide_index=True)
-
-        st.markdown("#### Fondos en tránsito (pendientes de acreditación)")
-        st.dataframe(
-            pendientes[["id", "plataforma", "nro_lote", "fecha_liquidacion", "neto_esperado"]],
-            hide_index=True,
-        )
-
-        st.markdown("#### Facturas sin liquidar en el período")
-        sin_liq = consultar(
-            """SELECT fecha, tipo, punto_venta, numero, razon_social, total FROM facturas
-               WHERE fecha BETWEEN ? AND ?
-               AND id NOT IN (SELECT factura_id FROM liquidacion_factura)
-               ORDER BY fecha""",
-            (d3, h3),
-        )
-        st.dataframe(sin_liq, hide_index=True)
-
-        buf = BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as w:
-            resumen.to_excel(w, sheet_name="Resumen", index=False)
-            ded.to_excel(w, sheet_name="Deducciones", index=False)
-            liq.drop(columns=["deducciones"]).to_excel(w, sheet_name="Detalle", index=False)
-            pendientes.to_excel(w, sheet_name="Pendientes", index=False)
-            sin_liq.to_excel(w, sheet_name="Facturas sin liquidar", index=False)
-
-        st.download_button(
-            "📥 Descargar informe en Excel",
-            data=buf.getvalue(),
-            file_name=f"informe_liquidaciones_{d3}_{h3}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-        )
-        registrar("Informe", f"Generó informe {d3} al {h3}")
+if vista == "Carga de Registro de Ventas":
+    vista_ventas()
+elif vista == "Liquidaciones":
+    vista_liquidaciones()
+elif vista == "Extractos Bancarios":
+    vista_extractos()
+elif bloque == "📈 Contabilidad":
+    vista_contabilidad(vista)
