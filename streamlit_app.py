@@ -51,18 +51,19 @@ if st.sidebar.button(
   st.session_state["modulo_activo"] = "Ventas"
   st.rerun()
 
-# Desplegable Módulo Tesorería
+# Desplegable Módulo Tesorería (Cambio automático al hacer clic en el radio)
 with st.sidebar.expander("💰 Tesorería", expanded=False):
   sub_tesoreria = st.radio(
       "Seleccione una tarea:",
       ["Liquidaciones", "Extractos Bancarios"],
       key="sub_tesoreria_radio",
   )
-  if st.button("Ir a Tesorería", key="btn_go_tesoreria", type="primary"):
-    st.session_state["modulo_activo"] = f"Tesorería - {sub_tesoreria}"
+  nuevo_estado_tesoreria = f"Tesorería - {sub_tesoreria}"
+  if st.session_state["modulo_activo"] != nuevo_estado_tesoreria:
+    st.session_state["modulo_activo"] = nuevo_estado_tesoreria
     st.rerun()
 
-# Desplegable Módulo Contabilidad
+# Desplegable Módulo Contabilidad (Cambio automático al hacer clic en el radio)
 with st.sidebar.expander("📈 Contabilidad", expanded=False):
   sub_contabilidad = st.radio(
       "Seleccione un informe:",
@@ -74,8 +75,9 @@ with st.sidebar.expander("📈 Contabilidad", expanded=False):
       ],
       key="sub_contabilidad_radio",
   )
-  if st.button("Ir a Contabilidad", key="btn_go_contabilidad", type="primary"):
-    st.session_state["modulo_activo"] = f"Contabilidad - {sub_contabilidad}"
+  nuevo_estado_contabilidad = f"Contabilidad - {sub_contabilidad}"
+  if st.session_state["modulo_activo"] != nuevo_estado_contabilidad:
+    st.session_state["modulo_activo"] = nuevo_estado_contabilidad
     st.rerun()
 
 st.sidebar.markdown("---")
