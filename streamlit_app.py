@@ -1,5 +1,6 @@
 import re
 import sqlite3
+import traceback
 import unicodedata
 from contextlib import closing
 from datetime import date, datetime
@@ -13,7 +14,7 @@ import streamlit as st
 # ======================= CONFIGURACIÓN =======================
 DB_PATH = "conciliacion.db"
 USUARIOS = {"socio1": "clave1", "socio2": "clave2"}  # Cambiar. Recomendado: st.secrets
-TOLERANCIA = 0.05  # diferencia máxima aceptada en pesos (tope permitido)
+TOLERANCIA = 0.05  # diferencia máxima aceptada en pesos
 
 st.set_page_config(
     page_title="Liquidaciones y Conciliación - Castillo de Oro",
@@ -135,13 +136,6 @@ def sin_acentos(t):
     ).lower()
 
 
-def buscar_col(cols, *palabras):
-    for c in cols:
-        if all(p in c for p in palabras):
-            return c
-    return None
-
-
 def calcular(bruto, com, cf, iva_com, ret, neto_acred, fecha_acred):
     """Devuelve (neto_esperado, diferencia, estado)."""
     esperado = (bruto or 0) - (com or 0) - (cf or 0) - (iva_com or 0) - (ret or 0)
@@ -165,7 +159,7 @@ FILA_FECHA_MONTO_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\b.*?(\d{1,3}(?:\.\d{3})*
 
 def filas_por_fecha(texto):
     """Lee las filas del PDF que empiezan con fecha de compra y traen un importe.
-    Devuelve [{'fecha': date, 'monto': float}]. Una fila = una compra o un grupo del día."""
+    Devuelve [{'fecha': date, 'monto': float}]."""
     filas = []
     for linea in texto.splitlines():
         m = FILA_FECHA_MONTO_RE.match(linea.strip())
@@ -190,7 +184,7 @@ def buscar_combinacion(cands, objetivo):
 
 def cruzar_por_dia(filas):
     """Por cada fila: facturas de AFIP con fecha ±1 día cuya suma coincida con el monto.
-    Estados: Conciliado / Revisar (hay facturas pero no cierran) / Posnet sin factura."""
+    Estados: Conciliado / Revisar / Posnet sin factura."""
     ids = set()
     totales = {"Conciliado": 0.0, "Revisar": 0.0, "Posnet sin factura": 0.0}
     for fila in filas:
@@ -276,7 +270,7 @@ def extraer_liquidacion_pdf(archivo):
     else:
         avisos.append("No se encontró el importe de 'bruto'.")
 
-    # Comisiones: arancel menos bonificación (la bonificación aumenta el neto)
+    # Comisiones: arancel menos bonificación
     arancel = sumar(r"^arancel")
     bonif = sumar(r"^bonificacion")
     if arancel is not None or bonif is not None:
@@ -417,8 +411,6 @@ def guardar_liquidacion_auto(datos, usuario, nombre_pdf):
             "INSERT INTO liquidacion_comprobantes (liquidacion_id, pv, numero) VALUES (?,?,?)",
             (liq_id, pv, nro),
         )
-    # La liquidación ya quedó guardada. La vinculación con AFIP es un paso aparte
-    # que no debe impedir el guardado.
     registrar("Liquidación automática", f"#{liq_id} {plataforma} desde {nombre_pdf}")
     try:
         n_vinc = vincular_liquidacion(liq_id)
@@ -437,15 +429,18 @@ def selector_rango(key):
 
 # ======================= IMPORTACIÓN AFIP =======================
 def leer_afip(archivo):
-    """Lee el export de AFIP saltando la fila de título hasta encontrar 'Fecha'."""
+    """Lee el export de AFIP (CSV o XLSX) saltando cualquier fila de título."""
     archivo.seek(0)
     if archivo.name.lower().endswith("xlsx"):
         raw = pd.read_excel(archivo, header=None, dtype=str)
     else:
-        raw = pd.read_csv(archivo, header=None, sep=None, engine="python", dtype=str)
+        raw = pd.read_csv(
+            archivo, header=None, sep=None, engine="python",
+            dtype=str, encoding="utf-8-sig",
+        )
     inicio = next(
         i for i, fila in raw.iterrows()
-        if any(isinstance(x, str) and sin_acentos(x).strip() == "fecha" for x in fila)
+        if any(isinstance(x, str) and sin_acentos(x).strip().startswith("fecha") for x in fila)
     )
     df = raw.iloc[inicio + 1:].copy()
     df.columns = [str(x).strip() for x in raw.iloc[inicio]]
@@ -453,19 +448,27 @@ def leer_afip(archivo):
 
 
 def normalizar_afip(df):
-    """Mapeo exacto a los encabezados reales del export de AFIP."""
+    """Encuentra las columnas del export de AFIP por el comienzo de su nombre."""
     cols = {sin_acentos(c).strip(): c for c in df.columns}
+
+    def buscar(*prefijos):
+        for p in prefijos:
+            for k, original in cols.items():
+                if k.startswith(p):
+                    return original
+        return None
+
     return {
-        "fecha": cols.get("fecha"),
-        "tipo": cols.get("tipo"),
-        "pv": cols.get("punto de venta"),
-        "numero": cols.get("numero desde"),
-        "cuit": cols.get("nro. doc. receptor"),
-        "razon": cols.get("denominacion receptor"),
-        "neto": cols.get("neto gravado total"),
-        "iva": cols.get("total iva"),
-        "total": cols.get("imp. total"),
-        "cae": cols.get("cod. autorizacion"),
+        "fecha": buscar("fecha de emision", "fecha"),
+        "tipo": buscar("tipo de comprobante"),
+        "pv": buscar("punto de venta"),
+        "numero": buscar("numero desde"),
+        "cuit": buscar("nro. doc. receptor", "nro doc receptor"),
+        "razon": buscar("denominacion receptor"),
+        "neto": buscar("imp. neto gravado total", "neto gravado total"),
+        "iva": buscar("total iva"),
+        "total": buscar("imp. total"),
+        "cae": buscar("cod. autorizacion", "cod autorizacion"),
     }
 
 
@@ -482,7 +485,9 @@ def importar_facturas(df_raw, usuario):
     nuevas = 0
     with closing(sqlite3.connect(DB_PATH, timeout=30)) as con:
         for _, r in df.iterrows():
-            fecha = pd.to_datetime(get(r, "fecha"), dayfirst=True, errors="coerce")
+            fecha = pd.to_datetime(get(r, "fecha"), format="%Y-%m-%d", errors="coerce")
+            if pd.isna(fecha):
+                fecha = pd.to_datetime(get(r, "fecha"), dayfirst=True, errors="coerce")
             if pd.isna(fecha):
                 continue
             cur = con.execute(
@@ -538,7 +543,6 @@ if st.sidebar.button("🚪 Salir"):
     registrar("Salida", "Sesión cerrada")
     st.session_state["usuario"] = None
     st.rerun()
-
 
 # ======================= MENÚ ACORDEÓN EN EL LATERAL =======================
 SUBMENUS = {
@@ -610,6 +614,14 @@ if vista == "Carga de Registro de Ventas":
         except Exception as e:
             st.error(f"No se pudo importar: {e}")
 
+    with st.expander("⚠️ Reiniciar facturas (usar si neto o IVA quedaron en 0)"):
+        st.caption("Borra las facturas importadas y sus vinculaciones. Después vuelve a subir el Excel de AFIP.")
+        if st.button("Borrar facturas y reimportar"):
+            ejecutar("DELETE FROM liquidacion_factura")
+            ejecutar("DELETE FROM facturas")
+            registrar("Reinicio", "Facturas borradas para reimportar desde AFIP")
+            st.success("Facturas borradas. Ahora sube de nuevo el Excel de AFIP.")
+
     st.markdown("#### Facturas cargadas")
     d, h = selector_rango("fact")
     facturas = consultar(
@@ -660,9 +672,12 @@ def vista_planilla():
         "id": "ID", "fecha_liquidacion": "FECHA LIQ.", "plataforma": "PLATAFORMA",
         "nro_lote": "N° LIQUIDACION", "facturas": "FACTURAS", "monto_fac": "MONTO FAC.",
         "bruto": "TT PRESENTADO", "comision": "ARANCEL", "costo_financiero": "FINANCIACION",
-        "iva_comision": "IVA", "IVA 21%": "IVA 21%", "IVA 10,5%": "IVA 10,5%", "IVA 27%": "IVA 27%", "SIRTAC / IIBB": "SIRTAC / IIBB", "Percepciones": "PERCEPCIONES", "Impuesto débitos y créditos": "DÉB. Y CRÉD.", "retenciones": "PER./SIRTAC/OTROS", "ded": "TT DEDUCCIONES",
-        "esperado": "ACREDITACION ESPERADA", "fecha_acreditacion": "FECHA ACRED.",
-        "neto_acreditado": "ACREDITADO BANCO", "control": "CONTROL",
+        "iva_comision": "IVA", "IVA 21%": "IVA 21%", "IVA 10,5%": "IVA 10,5%", "IVA 27%": "IVA 27%",
+        "SIRTAC / IIBB": "SIRTAC / IIBB", "Percepciones": "PERCEPCIONES",
+        "Impuesto débitos y créditos": "DÉB. Y CRÉD.", "retenciones": "PER./SIRTAC/OTROS",
+        "ded": "TT DEDUCCIONES", "esperado": "ACREDITACION ESPERADA",
+        "fecha_acreditacion": "FECHA ACRED.", "neto_acreditado": "ACREDITADO BANCO",
+        "control": "CONTROL",
     }
     vista_df = df.rename(columns=renombre)[list(renombre.values())]
 
@@ -729,13 +744,11 @@ if vista == "Liquidaciones" and sub_liq == "📤 Cargar liquidación":
             else:
                 liq_id, estado, n_vinc = guardar_liquidacion_auto(datos, usuario, pdf_liq.name)
                 st.success(
-                    f"Liquidación #{liq_id} guardada. Facturas vinculadas: "
-                    f"{n_vinc}. Estado: {estado}."
+                    f"Liquidación #{liq_id} guardada. Facturas vinculadas: {n_vinc}. Estado: {estado}."
                 )
                 for a in avisos:
                     st.warning(a)
         except Exception as e:
-            import traceback
             st.error(f"No se pudo procesar el PDF: {e}")
             st.code(traceback.format_exc())
 
@@ -913,7 +926,7 @@ if vista == "Conciliación Bancaria":
     st.dataframe(control, hide_index=True)
 
 # ---------- 4. CONTABILIDAD: INFORMES ----------
-# Informe 1: facturas vs neto final (después de impuestos, intereses y tasas)
+# Informe 1: facturas vs neto final
 if vista == "Facturas vs neto final":
     st.subheader("Facturas vs. lo que quedó después de impuestos, intereses y tasas")
     d4, h4 = selector_rango("r1")
@@ -1008,7 +1021,7 @@ if vista == "Impuestos para DDJJ":
             type="primary",
         )
 
-# Informe general (resumen anterior)
+# Informe general
 if vista == "Resumen general":
     st.subheader("Informes para la toma de decisiones")
     d3, h3 = selector_rango("inf")
