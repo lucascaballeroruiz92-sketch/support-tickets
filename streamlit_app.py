@@ -436,20 +436,36 @@ def selector_rango(key):
 
 
 # ======================= IMPORTACIÓN AFIP =======================
+def leer_afip(archivo):
+    """Lee el export de AFIP saltando la fila de título hasta encontrar 'Fecha'."""
+    archivo.seek(0)
+    if archivo.name.lower().endswith("xlsx"):
+        raw = pd.read_excel(archivo, header=None, dtype=str)
+    else:
+        raw = pd.read_csv(archivo, header=None, sep=None, engine="python", dtype=str)
+    inicio = next(
+        i for i, fila in raw.iterrows()
+        if any(isinstance(x, str) and sin_acentos(x).strip() == "fecha" for x in fila)
+    )
+    df = raw.iloc[inicio + 1:].copy()
+    df.columns = [str(x).strip() for x in raw.iloc[inicio]]
+    return df.dropna(how="all")
+
+
 def normalizar_afip(df):
-    df.columns = [sin_acentos(c).strip() for c in df.columns]
-    cols = list(df.columns)
+    """Mapeo exacto a los encabezados reales del export de AFIP."""
+    cols = {sin_acentos(c).strip(): c for c in df.columns}
     return {
-        "fecha": buscar_col(cols, "fecha"),
-        "tipo": buscar_col(cols, "tipo", "comprobante"),
-        "pv": buscar_col(cols, "punto"),
-        "numero": buscar_col(cols, "numero", "desde") or buscar_col(cols, "numero"),
-        "cuit": buscar_col(cols, "nro", "doc"),
-        "razon": buscar_col(cols, "denominacion") or buscar_col(cols, "razon"),
-        "neto": buscar_col(cols, "neto", "gravado") or buscar_col(cols, "neto"),
-        "iva": buscar_col(cols, "iva"),
-        "total": buscar_col(cols, "total"),
-        "cae": buscar_col(cols, "autoriz") or buscar_col(cols, "cae"),
+        "fecha": cols.get("fecha"),
+        "tipo": cols.get("tipo"),
+        "pv": cols.get("punto de venta"),
+        "numero": cols.get("numero desde"),
+        "cuit": cols.get("nro. doc. receptor"),
+        "razon": cols.get("denominacion receptor"),
+        "neto": cols.get("neto gravado total"),
+        "iva": cols.get("total iva"),
+        "total": cols.get("imp. total"),
+        "cae": cols.get("cod. autorizacion"),
     }
 
 
@@ -583,10 +599,7 @@ if vista == "Carga de Registro de Ventas":
     archivo = st.file_uploader("Archivo de AFIP", type=["csv", "xlsx"], key="up_afip")
     if archivo and st.button("Importar facturas", type="primary"):
         try:
-            if archivo.name.lower().endswith("xlsx"):
-                df = pd.read_excel(archivo, dtype=str)
-            else:
-                df = pd.read_csv(archivo, sep=None, engine="python", dtype=str)
+            df = leer_afip(archivo)
             nuevas, total = importar_facturas(df, usuario)
             n_vinc_afip = vincular_pendientes(usuario)
             registrar("Importación AFIP", f"{nuevas} facturas nuevas de {total} en {archivo.name}")
