@@ -14,6 +14,17 @@ st.set_page_config(
 # --- USUARIOS (cambiar las contraseñas antes de usar) ---
 USUARIOS = {"socio1": "clave1", "socio2": "clave2"}
 
+SUBMENUS = {
+    "📊 Ventas": ["Carga de Registro de Ventas"],
+    "💰 Tesorería": ["Liquidaciones", "Extractos Bancarios"],
+    "📈 Contabilidad": [
+        "Reporte Consolidado Ventas vs Acreditaciones",
+        "Reporte de Deducciones y Aranceles",
+        "Reporte de Pendientes de Acreditación",
+        "Reporte de Conciliación Bancaria",
+    ],
+}
+
 
 # ======================= UTILIDADES =======================
 def leer_archivo(archivo):
@@ -37,6 +48,14 @@ if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
 if "archivos" not in st.session_state:
     st.session_state["archivos"] = {}
+if "bloque_abierto" not in st.session_state:
+    st.session_state["bloque_abierto"] = "📊 Ventas"
+
+
+def alternar_bloque(nombre):
+    actual = st.session_state["bloque_abierto"]
+    st.session_state["bloque_abierto"] = None if actual == nombre else nombre
+
 
 # ======================= LOGIN =======================
 st.sidebar.image("https://img.icons8.com/color/96/wooden-furniture.png", width=70)
@@ -68,39 +87,26 @@ with col_u2:
         st.session_state["autenticado"] = False
         st.rerun()
 
-# ======================= MENÚ: BLOQUE Y SUBMENÚ =======================
+# ======================= MENÚ ACORDEÓN =======================
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
 
-bloque = st.sidebar.radio(
-    "Módulo:",
-    ["📊 Ventas", "💰 Tesorería", "📈 Contabilidad"],
-    key="menu_bloque",
-)
-
-if bloque == "📊 Ventas":
-    subopcion = st.sidebar.radio(
-        "Submenú:",
-        ["Carga de Registro de Ventas"],
-        key="menu_ventas",
+for nombre, opciones in SUBMENUS.items():
+    abierto = st.session_state["bloque_abierto"] == nombre
+    st.sidebar.button(
+        ("▾ " if abierto else "▸ ") + nombre,
+        key=f"btn_{nombre}",
+        on_click=alternar_bloque,
+        args=(nombre,),
+        use_container_width=True,
     )
-elif bloque == "💰 Tesorería":
-    subopcion = st.sidebar.radio(
-        "Submenú:",
-        ["Liquidaciones", "Extractos Bancarios"],
-        key="menu_tesoreria",
-    )
-else:
-    subopcion = st.sidebar.radio(
-        "Informe:",
-        [
-            "Reporte Consolidado Ventas vs Acreditaciones",
-            "Reporte de Deducciones y Aranceles",
-            "Reporte de Pendientes de Acreditación",
-            "Reporte de Conciliación Bancaria",
-        ],
-        key="menu_contabilidad",
-    )
+    if abierto:
+        st.sidebar.radio(
+            "Submenú:",
+            opciones,
+            key=f"sub_{nombre}",
+            label_visibility="collapsed",
+        )
 
 
 # ======================= 1. VENTAS =======================
@@ -283,13 +289,19 @@ def vista_contabilidad(nombre_informe):
     )
 
 
-# ======================= RENDERIZADO SEGÚN SUBMENÚ =======================
-if bloque == "📊 Ventas":
+# ======================= RENDERIZADO SEGÚN MENÚ =======================
+bloque_abierto = st.session_state["bloque_abierto"]
+
+if bloque_abierto is None:
+    st.info("Haga clic en un módulo del menú lateral para desplegar sus opciones.")
+elif bloque_abierto == "📊 Ventas":
     vista_ventas()
-elif bloque == "💰 Tesorería":
-    if subopcion == "Liquidaciones":
-        vista_liquidaciones()
-    else:
+elif bloque_abierto == "💰 Tesorería":
+    sub = st.session_state.get("sub_💰 Tesorería", SUBMENUS["💰 Tesorería"][0])
+    if sub == "Extractos Bancarios":
         vista_extractos()
-else:
-    vista_contabilidad(subopcion)
+    else:
+        vista_liquidaciones()
+elif bloque_abierto == "📈 Contabilidad":
+    sub = st.session_state.get("sub_📈 Contabilidad", SUBMENUS["📈 Contabilidad"][0])
+    vista_contabilidad(sub)
