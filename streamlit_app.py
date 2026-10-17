@@ -278,7 +278,7 @@ if "usuario" not in st.session_state:
     st.session_state["usuario"] = None
 
 if not st.session_state["usuario"]:
-    st.title("💳 Liquidaciones y Conciliación")
+    st.title("Castillo de Oro")
     with st.form("login"):
         u = st.selectbox("Usuario", list(USUARIOS))
         p = st.text_input("Contraseña", type="password")
@@ -337,7 +337,7 @@ for nombre, opciones in SUBMENUS.items():
             label_visibility="collapsed",
         )
 
-st.title("💳 Liquidaciones y Conciliación")
+st.title("Castillo de Oro")
 
 bloque = st.session_state["bloque_abierto"]
 if bloque is None:
