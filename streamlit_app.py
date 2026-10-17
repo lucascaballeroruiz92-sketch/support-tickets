@@ -541,7 +541,16 @@ def vista_planilla():
     if base.empty:
         st.info("Todavía no hay liquidaciones. Sube un PDF abajo para empezar.")
         return
+    imp = consultar("""SELECT liquidacion_id AS id, impuesto, SUM(monto) AS monto
+        FROM liquidacion_impuestos GROUP BY liquidacion_id, impuesto""")
     df = base.merge(facs, on="id", how="left")
+    if not imp.empty:
+        imp_p = imp.pivot(index="id", columns="impuesto", values="monto").reset_index()
+        df = df.merge(imp_p, on="id", how="left")
+    for col in ["IVA 21%", "IVA 10,5%", "IVA 27%", "SIRTAC / IIBB", "Percepciones", "Impuesto débitos y créditos"]:
+        if col not in df.columns:
+            df[col] = 0.0
+        df[col] = df[col].fillna(0.0)
     df["facturas"] = df["facturas"].fillna("Sin factura vinculada")
     df["monto_fac"] = df["monto_fac"].fillna(0.0)
     df["ded"] = df.comision.fillna(0) + df.costo_financiero.fillna(0) + df.iva_comision.fillna(0) + df.retenciones.fillna(0)
@@ -554,7 +563,7 @@ def vista_planilla():
         "id": "ID", "fecha_liquidacion": "FECHA LIQ.", "plataforma": "PLATAFORMA",
         "nro_lote": "N° LIQUIDACION", "facturas": "FACTURAS", "monto_fac": "MONTO FAC.",
         "bruto": "TT PRESENTADO", "comision": "ARANCEL", "costo_financiero": "FINANCIACION",
-        "iva_comision": "IVA", "retenciones": "PER./SIRTAC/OTROS", "ded": "TT DEDUCCIONES",
+        "iva_comision": "IVA", "IVA 21%": "IVA 21%", "IVA 10,5%": "IVA 10,5%", "IVA 27%": "IVA 27%", "SIRTAC / IIBB": "SIRTAC / IIBB", "Percepciones": "PERCEPCIONES", "Impuesto débitos y créditos": "DÉB. Y CRÉD.", "retenciones": "PER./SIRTAC/OTROS", "ded": "TT DEDUCCIONES",
         "esperado": "ACREDITACION ESPERADA", "fecha_acreditacion": "FECHA ACRED.",
         "neto_acreditado": "ACREDITADO BANCO", "control": "CONTROL",
     }
@@ -569,7 +578,9 @@ def vista_planilla():
             "FECHA LIQ.": st.column_config.DateColumn("FECHA LIQ.", format="DD/MM/YYYY"),
             "FECHA ACRED.": st.column_config.DateColumn("FECHA ACRED.", format="DD/MM/YYYY"),
             "TT PRESENTADO": dinero, "ARANCEL": dinero, "FINANCIACION": dinero,
-            "IVA": dinero, "PER./SIRTAC/OTROS": dinero, "ACREDITADO BANCO": dinero,
+            "IVA": dinero, "IVA 21%": dinero, "IVA 10,5%": dinero, "IVA 27%": dinero,
+            "SIRTAC / IIBB": dinero, "PERCEPCIONES": dinero, "DÉB. Y CRÉD.": dinero,
+            "PER./SIRTAC/OTROS": dinero, "ACREDITADO BANCO": dinero,
             "MONTO FAC.": dinero, "TT DEDUCCIONES": dinero,
             "ACREDITACION ESPERADA": dinero, "CONTROL": dinero,
         },
@@ -588,9 +599,17 @@ def vista_planilla():
 
 # ---------- 2. TESORERÍA: LIQUIDACIONES ----------
 if vista == "Liquidaciones":
-    vista_planilla()
-    st.divider()
+    sub_liq = st.radio(
+        "Sección de Liquidaciones:",
+        ["📊 Planilla (Excel)", "📤 Cargar liquidación"],
+        horizontal=True,
+        key="sub_liq",
+    )
 
+if vista == "Liquidaciones" and sub_liq == "📊 Planilla (Excel)":
+    vista_planilla()
+
+if vista == "Liquidaciones" and sub_liq == "📤 Cargar liquidación":
     st.subheader("1. Subir PDF de la liquidación (automático)")
     st.caption(
         "Sube el PDF de la liquidación. La app lee los importes, busca la factura de AFIP "
