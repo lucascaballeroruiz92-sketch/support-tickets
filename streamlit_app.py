@@ -27,7 +27,7 @@ if not st.session_state["autenticado"]:
   usuario = st.sidebar.text_input("Usuario", key="user_login")
   password = st.sidebar.text_input("Contraseña", type="password", key="pass_login")
 
-  if st.sidebar.button("Ingresar al Sistema"):
+  if st.sidebar.button("Ingresar al Sistema", type="primary"):
     if usuario and password:
       st.session_state["autenticado"] = True
       st.session_state["usuario_actual"] = usuario
@@ -36,60 +36,35 @@ if not st.session_state["autenticado"]:
       st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
-# --- MENÚ DE MÓDULOS PRINCIPALES ---
+# --- MENÚ DE NAVEGACIÓN PRINCIPAL ---
 st.sidebar.success(f"Usuario: {st.session_state.get('usuario_actual')}")
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
 
-if "modulo_activo" not in st.session_state:
-  st.session_state["modulo_activo"] = "Ventas"
+# Menú desplegable unificado y limpio para evitar bucles
+menu_opciones = [
+    "📊 Ventas",
+    "💰 Tesorería - Liquidaciones",
+    "💰 Tesorería - Extractos Bancarios",
+    "📈 Contabilidad - Reporte Consolidado Ventas vs Acreditaciones",
+    "📈 Contabilidad - Reporte de Deducciones y Aranceles",
+    "📈 Contabilidad - Reporte de Pendientes de Acreditación",
+    "📈 Contabilidad - Reporte de Conciliación Bancaria",
+]
 
-# Botón Módulo Ventas
-if st.sidebar.button(
-    "📊 Ventas", use_container_width=True, key="btn_menu_ventas"
-):
-  st.session_state["modulo_activo"] = "Ventas"
-  st.rerun()
-
-# Desplegable Módulo Tesorería (Cambio automático al hacer clic en el radio)
-with st.sidebar.expander("💰 Tesorería", expanded=False):
-  sub_tesoreria = st.radio(
-      "Seleccione una tarea:",
-      ["Liquidaciones", "Extractos Bancarios"],
-      key="sub_tesoreria_radio",
-  )
-  nuevo_estado_tesoreria = f"Tesorería - {sub_tesoreria}"
-  if st.session_state["modulo_activo"] != nuevo_estado_tesoreria:
-    st.session_state["modulo_activo"] = nuevo_estado_tesoreria
-    st.rerun()
-
-# Desplegable Módulo Contabilidad (Cambio automático al hacer clic en el radio)
-with st.sidebar.expander("📈 Contabilidad", expanded=False):
-  sub_contabilidad = st.radio(
-      "Seleccione un informe:",
-      [
-          "Reporte Consolidado Ventas vs Acreditaciones",
-          "Reporte de Deducciones y Aranceles",
-          "Reporte de Pendientes de Acreditación",
-          "Reporte de Conciliación Bancaria",
-      ],
-      key="sub_contabilidad_radio",
-  )
-  nuevo_estado_contabilidad = f"Contabilidad - {sub_contabilidad}"
-  if st.session_state["modulo_activo"] != nuevo_estado_contabilidad:
-    st.session_state["modulo_activo"] = nuevo_estado_contabilidad
-    st.rerun()
+seleccion = st.sidebar.radio(
+    "Seleccione una opción:", menu_opciones, key="radio_navegacion_principal"
+)
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🚪 Cerrar Sesión"):
   st.session_state["autenticado"] = False
   st.rerun()
 
-# --- CONTENIDO SEGÚN MÓDULO Y SUBMÓDULO SELECCIONADO ---
-modulo_actual = st.session_state["modulo_activo"]
+# --- CONTENIDO SEGÚN LA SELECCIÓN ---
 
 # 1. MÓDULO DE VENTAS
-if modulo_actual == "Ventas":
+if seleccion == "📊 Ventas":
   st.markdown("## 📊 Módulo de Ventas")
   st.write(
       "Gestión de facturación, comprobantes comerciales y registro de bruto"
@@ -114,7 +89,7 @@ if modulo_actual == "Ventas":
       st.warning("Selecciona un archivo de ventas para registrar.")
 
 # 2. TESORERÍA - LIQUIDACIONES
-elif "Tesorería - Liquidaciones" in modulo_actual:
+elif seleccion == "💰 Tesorería - Liquidaciones":
   st.markdown("## 💰 Tesorería - Liquidaciones")
   st.write(
       "Bandeja unificada de carga de liquidaciones y comprobantes para"
@@ -143,7 +118,7 @@ elif "Tesorería - Liquidaciones" in modulo_actual:
       st.warning("Sube al menos un archivo para procesar.")
 
 # 3. TESORERÍA - EXTRACTOS BANCARIOS
-elif "Tesorería - Extractos Bancarios" in modulo_actual:
+elif seleccion == "💰 Tesorería - Extractos Bancarios":
   st.markdown("## 💰 Tesorería - Extractos Bancarios")
   st.write(
       "Carga de extractos bancarios para automatizar el cálculo y la"
@@ -171,9 +146,9 @@ elif "Tesorería - Extractos Bancarios" in modulo_actual:
     else:
       st.warning("Sube un extracto bancario para realizar la conciliación.")
 
-# 4. CONTABILIDAD - INFORMES CON FILTRO DE PERÍODO
-elif "Contabilidad" in modulo_actual:
-  nombre_informe = modulo_actual.split(" - ")[1]
+# 4. CONTABILIDAD - INFORMES CON RANGO DE FECHAS
+elif "📈 Contabilidad" in seleccion:
+  nombre_informe = seleccion.split(" - ")[1]
   st.markdown(f"## 📈 Contabilidad - {nombre_informe}")
   st.write(
       "Seleccione el rango de fechas para auditar y generar el informe oficial"
@@ -181,7 +156,6 @@ elif "Contabilidad" in modulo_actual:
   )
   st.markdown("---")
 
-  # --- FILTRO DE RANGO DE FECHAS PARA AUDITORÍA ---
   col_f1, col_f2 = st.columns(2)
   with col_f1:
     fecha_desde = st.date_input(
@@ -234,7 +208,6 @@ elif "Contabilidad" in modulo_actual:
         " 100%."
     )
 
-  # Botón de Descarga del Informe con las fechas seleccionadas
   st.markdown("<br>", unsafe_allow_html=True)
   html_reporte = f"""
     <html>
