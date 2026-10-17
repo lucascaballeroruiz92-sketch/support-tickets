@@ -136,6 +136,33 @@ def txt(x):
     return str(x).strip().split(".0")[0] if str(x).endswith(".0") else str(x).strip()
 
 
+# ======================= FORMATO DE NÚMEROS EN TABLAS =======================
+# Muestra los importes como 1.234.567,89 (punto para miles, coma para centavos).
+# Se aplica a todas las tablas de la app sin tocar cada llamada.
+if not hasattr(st, "_df_original"):
+    st._df_original = st.dataframe
+
+
+def _numero_ar(x):
+    if pd.isna(x):
+        return ""
+    s = f"{x:,.2f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _dataframe_ar(data, *args, **kwargs):
+    kwargs.pop("column_config", None)
+    if isinstance(data, pd.DataFrame):
+        data = data.copy()
+        for c in data.columns:
+            if pd.api.types.is_float_dtype(data[c]):
+                data[c] = data[c].map(_numero_ar)
+    return st._df_original(data, *args, **kwargs)
+
+
+st.dataframe = _dataframe_ar
+
+
 def sin_acentos(t):
     return "".join(
         c for c in unicodedata.normalize("NFD", str(t))
