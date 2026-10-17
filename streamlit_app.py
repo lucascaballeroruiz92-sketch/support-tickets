@@ -1,7 +1,7 @@
 import base64
 from datetime import date
 from io import BytesIO
-import numpy as np
+
 import pandas as pd
 import streamlit as st
 
@@ -11,44 +11,65 @@ st.set_page_config(
     layout="wide",
 )
 
+# --- USUARIOS (cambiar las contraseñas antes de usar) ---
+USUARIOS = {"socio1": "clave1", "socio2": "clave2"}
+
+
+def leer_archivo(archivo):
+    """Lee CSV o XLSX y devuelve un DataFrame. Reinicia el puntero del archivo."""
+    archivo.seek(0)
+    if archivo.name.lower().endswith(".xlsx"):
+        return pd.read_excel(archivo, dtype=str)
+    return pd.read_csv(archivo, sep=None, engine="python", dtype=str)
+
+
+def selector_rango(key):
+    hoy = date.today()
+    c1, c2 = st.columns(2)
+    desde = c1.date_input("📅 Desde la fecha:", value=date(hoy.year, 1, 1), key=f"{key}_desde")
+    hasta = c2.date_input("📅 Hasta la fecha:", value=hoy, key=f"{key}_hasta")
+    return desde, hasta
+
+
 # --- CONTROL DE SESIÓN ---
 if "autenticado" not in st.session_state:
-  st.session_state["autenticado"] = False
+    st.session_state["autenticado"] = False
+if "archivos" not in st.session_state:
+    st.session_state["archivos"] = {}
 
-# --- BARRA LATERAL (SIDEBAR) - AUTENTICACIÓN Y NAVEGACIÓN ---
-st.sidebar.image(
-    "https://img.icons8.com/color/96/wooden-furniture.png", width=70
-)
+# --- BARRA LATERAL: AUTENTICACIÓN ---
+st.sidebar.image("https://img.icons8.com/color/96/wooden-furniture.png", width=70)
 st.sidebar.title("Mueblería Castillo de Oro")
 st.sidebar.markdown("---")
 
 if not st.session_state["autenticado"]:
-  st.sidebar.subheader("🔒 Acceso al Sistema")
-  usuario = st.sidebar.text_input("Usuario", key="user_login")
-  password = st.sidebar.text_input("Contraseña", type="password", key="pass_login")
+    st.sidebar.subheader("🔒 Acceso al Sistema")
+    with st.sidebar.form("login"):
+        usuario = st.text_input("Usuario")
+        password = st.text_input("Contraseña", type="password")
+        ingresar = st.form_submit_button("Ingresar al Sistema", type="primary")
 
-  if st.sidebar.button("Ingresar al Sistema", type="primary"):
-    if usuario and password:
-      st.session_state["autenticado"] = True
-      st.session_state["usuario_actual"] = usuario
-      st.rerun()
-    else:
-      st.sidebar.error("Por favor completa los datos de acceso.")
-  st.stop()
+    if ingresar:
+        if usuario in USUARIOS and USUARIOS[usuario] == password:
+            st.session_state["autenticado"] = True
+            st.session_state["usuario_actual"] = usuario
+            st.rerun()
+        else:
+            st.sidebar.error("Usuario o contraseña incorrectos.")
+    st.stop()
 
-# --- CABECERA DE USUARIO Y CIERRE DE SESIÓN ---
+# --- CABECERA DE USUARIO Y SALIDA ---
 col_u1, col_u2 = st.sidebar.columns([2, 1])
 with col_u1:
-  st.write(f"👤 **{st.session_state.get('usuario_actual')}**")
+    st.write(f"👤 **{st.session_state['usuario_actual']}**")
 with col_u2:
-  if st.button("🚪 Salir", key="btn_logout"):
-    st.session_state["autenticado"] = False
-    st.rerun()
+    if st.button("🚪 Salir", key="btn_logout"):
+        st.session_state["autenticado"] = False
+        st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
 
-# Menú desplegable lateral limpio y 100% estable (Evita bucles de pantalla en blanco)
 menu_opcion = st.sidebar.selectbox(
     "Seleccione Sección / Módulo:",
     [
@@ -63,178 +84,179 @@ menu_opcion = st.sidebar.selectbox(
     key="select_menu_principal",
 )
 
-# --- RENDERIZADO DE CONTENIDO SEGÚN LA SELECCIÓN ---
-
-# 1. MÓDULO DE VENTAS
+# --- 1. VENTAS ---
 if menu_opcion == "📊 Ventas":
-  st.markdown("## 📊 Módulo de Ventas")
-  st.write(
-      "Gestión de facturación, comprobantes comerciales y registro de bruto"
-      " declarado para **Mueblería Castillo de Oro**."
-  )
-  st.markdown("---")
+    st.markdown("## 📊 Módulo de Ventas")
+    st.write(
+        "Gestión de facturación, comprobantes comerciales y registro de bruto "
+        "declarado para **Mueblería Castillo de Oro**."
+    )
+    st.markdown("---")
 
-  st.subheader("Carga de Registro de Ventas")
-  ventas_file = st.file_uploader(
-      "Subir archivo de registro de ventas / facturación (CSV, XLSX):",
-      type=["csv", "xlsx"],
-      key="ventas_uploader",
-  )
+    st.subheader("Carga de Registro de Ventas")
+    ventas_file = st.file_uploader(
+        "Subir archivo de registro de ventas / facturación (CSV, XLSX):",
+        type=["csv", "xlsx"],
+        key="ventas_uploader",
+    )
 
-  if ventas_file:
-    st.info(f"Archivo cargado: {ventas_file.name}")
+    if st.button("Registrar Ventas", type="primary"):
+        if ventas_file:
+            try:
+                st.session_state["archivos"]["ventas"] = leer_archivo(ventas_file)
+                st.success(
+                    f"¡Registro de ventas actualizado! {len(st.session_state['archivos']['ventas'])} filas leídas."
+                )
+            except Exception as e:
+                st.error(f"No se pudo leer el archivo: {e}")
+        else:
+            st.warning("Selecciona un archivo de ventas para registrar.")
 
-  if st.button("Registrar Ventas", type="primary"):
-    if ventas_file:
-      st.success("¡Registro de ventas actualizado correctamente!")
-    else:
-      st.warning("Selecciona un archivo de ventas para registrar.")
+    if "ventas" in st.session_state["archivos"]:
+        st.markdown("#### Vista previa de ventas registradas")
+        st.dataframe(st.session_state["archivos"]["ventas"], hide_index=True)
 
-# 2. TESORERÍA - LIQUIDACIONES
+# --- 2. TESORERÍA - LIQUIDACIONES ---
 elif menu_opcion == "💰 Tesorería - Liquidaciones":
-  st.markdown("## 💰 Tesorería - Liquidaciones")
-  st.write(
-      "Bandeja unificada de carga de liquidaciones y comprobantes para"
-      " procesar comisiones, tasas e impuestos."
-  )
-  st.markdown("---")
-
-  archivos_liquidaciones = st.file_uploader(
-      "Arrastra o selecciona todos los archivos de liquidación aquí:",
-      type=["csv", "xlsx", "pdf"],
-      accept_multiple_files=True,
-      key="uploader_liquidaciones",
-  )
-
-  if archivos_liquidaciones:
-    st.info(
-        f"Se han cargado {len(archivos_liquidaciones)} archivo(s) correctamente."
+    st.markdown("## 💰 Tesorería - Liquidaciones")
+    st.write(
+        "Bandeja unificada de carga de liquidaciones y comprobantes para procesar "
+        "comisiones, tasas e impuestos."
     )
-    for archivo in archivos_liquidaciones:
-      st.text(f"📄 Archivo cargado: {archivo.name}")
+    st.markdown("---")
 
-  if st.button("Procesar Liquidaciones", type="primary"):
-    if archivos_liquidaciones:
-      st.success("¡Liquidaciones procesadas con éxito!")
-    else:
-      st.warning("Sube al menos un archivo para procesar.")
+    archivos_liq = st.file_uploader(
+        "Arrastra o selecciona todos los archivos de liquidación aquí:",
+        type=["csv", "xlsx", "pdf"],
+        accept_multiple_files=True,
+        key="uploader_liquidaciones",
+    )
 
-# 3. TESORERÍA - EXTRACTOS BANCARIOS
+    if st.button("Procesar Liquidaciones", type="primary"):
+        if archivos_liq:
+            st.session_state["archivos"]["liquidaciones"] = archivos_liq
+            st.success(f"¡Liquidaciones procesadas! {len(archivos_liq)} archivo(s).")
+        else:
+            st.warning("Sube al menos un archivo para procesar.")
+
+    for archivo in st.session_state["archivos"].get("liquidaciones", []):
+        st.text(f"📄 {archivo.name}")
+        if not archivo.name.lower().endswith(".pdf"):
+            try:
+                st.dataframe(leer_archivo(archivo), hide_index=True)
+            except Exception as e:
+                st.error(f"No se pudo leer {archivo.name}: {e}")
+
+# --- 3. TESORERÍA - EXTRACTOS BANCARIOS ---
 elif menu_opcion == "💰 Tesorería - Extractos Bancarios":
-  st.markdown("## 💰 Tesorería - Extractos Bancarios")
-  st.write(
-      "Carga de extractos bancarios para automatizar el cálculo y la"
-      " conciliación de acreditaciones frente a lo pendiente de cobro."
-  )
-  st.markdown("---")
-
-  extractos_files = st.file_uploader(
-      "Subir extractos bancarios (PDF, CSV, XLSX):",
-      type=["csv", "xlsx", "pdf"],
-      accept_multiple_files=True,
-      key="uploader_extractos",
-  )
-
-  if extractos_files:
-    st.info(f"Se han cargado {len(extractos_files)} extracto(s) bancario(s).")
-    for ext in extractos_files:
-      st.text(f"🏦 Extracto detectado: {ext.name}")
-
-  if st.button("Conciliar con Extractos Bancarios", type="primary"):
-    if extractos_files:
-      st.success(
-          "¡Extractos conciliados correctamente con el módulo de contabilidad!"
-      )
-    else:
-      st.warning("Sube un extracto bancario para realizar la conciliación.")
-
-# 4. CONTABILIDAD - INFORMES CON FILTRO DE PERÍODO HISTÓRICO
-elif "📈 Contabilidad" in menu_opcion:
-  nombre_informe = menu_opcion.split(" - ")[1]
-  st.markdown(f"## 📈 Contabilidad - {nombre_informe}")
-  st.write(
-      "Seleccione el rango de fechas para auditar y generar el informe oficial"
-      " histórico de **Mueblería Castillo de Oro**."
-  )
-  st.markdown("---")
-
-  # --- FILTRO DE RANGO DE FECHAS PARA AUDITORÍA ---
-  col_f1, col_f2 = st.columns(2)
-  with col_f1:
-    fecha_desde = st.date_input(
-        "📅 Desde la fecha:", value=date(2026, 1, 1), key="filtro_desde"
+    st.markdown("## 💰 Tesorería - Extractos Bancarios")
+    st.write(
+        "Carga de extractos bancarios para automatizar el cálculo y la conciliación "
+        "de acreditaciones frente a lo pendiente de cobro."
     )
-  with col_f2:
-    fecha_hasta = st.date_input(
-        "📅 Hasta la fecha:", value=date.today(), key="filtro_hasta"
+    st.markdown("---")
+
+    extractos_files = st.file_uploader(
+        "Subir extractos bancarios (PDF, CSV, XLSX):",
+        type=["csv", "xlsx", "pdf"],
+        accept_multiple_files=True,
+        key="uploader_extractos",
     )
 
-  st.markdown(
-      f"🔍 *Filtrando registros desde el **{fecha_desde.strftime('%d/%m/%Y')}**"
-      f" al **{fecha_hasta.strftime('%d/%m/%Y')}***"
-  )
-  st.markdown("---")
+    if st.button("Conciliar con Extractos Bancarios", type="primary"):
+        if extractos_files:
+            st.session_state["archivos"]["extractos"] = extractos_files
+            st.success(f"¡Extractos cargados! {len(extractos_files)} archivo(s).")
+        else:
+            st.warning("Sube un extracto bancario para realizar la conciliación.")
 
-  if nombre_informe == "Reporte Consolidado Ventas vs Acreditaciones":
-    st.subheader("📊 Resumen Consolidado por Período")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Bruto Ventas", "$ 0,00")
-    col2.metric("Total Liquidado", "$ 0,00")
-    col3.metric("Acreditado en Banco", "$ 0,00")
-    col4.metric("Pendiente de Cobro", "$ 0,00")
+    for ext in st.session_state["archivos"].get("extractos", []):
+        st.text(f"🏦 Extracto detectado: {ext.name}")
+        if not ext.name.lower().endswith(".pdf"):
+            try:
+                st.dataframe(leer_archivo(ext), hide_index=True)
+            except Exception as e:
+                st.error(f"No se pudo leer {ext.name}: {e}")
 
-  elif nombre_informe == "Reporte de Deducciones y Aranceles":
-    st.subheader("🧾 Detalle de Aranceles e Impuestos del Período")
-    df_deducciones = pd.DataFrame({
-        "Concepto": [
-            "Aranceles",
-            "Costo Financiación / Cuotas",
-            "IVA 21%",
-            "Percepciones IVA / SIRTAC",
-            "Total Deducciones",
-        ],
-        "Importe ($)": [0.00, 0.00, 0.00, 0.00, 0.00],
-    })
-    st.table(df_deducciones)
+# --- 4. CONTABILIDAD - INFORMES ---
+elif menu_opcion.startswith("📈 Contabilidad"):
+    nombre_informe = menu_opcion.split(" - ", 1)[1]
+    st.markdown(f"## 📈 Contabilidad - {nombre_informe}")
+    st.write(
+        "Seleccione el rango de fechas para auditar y generar el informe oficial "
+        "histórico de **Mueblería Castillo de Oro**."
+    )
+    st.markdown("---")
 
-  elif nombre_informe == "Reporte de Pendientes de Acreditación":
-    st.subheader("⏳ Listado de Fondos en Tránsito a la Fecha")
+    fecha_desde, fecha_hasta = selector_rango("filtro")
+    st.markdown(
+        f"🔍 *Filtrando registros desde el **{fecha_desde.strftime('%d/%m/%Y')}** "
+        f"al **{fecha_hasta.strftime('%d/%m/%Y')}***"
+    )
+    st.markdown("---")
+
     st.info(
-        "No se registran saldos pendientes de acreditación para el período"
-        " seleccionado."
+        "Los importes de este informe se calcularán cuando estén conectados los datos "
+        "de ventas, liquidaciones y extractos. Por ahora se muestran como referencia."
     )
 
-  elif nombre_informe == "Reporte de Conciliación Bancaria":
-    st.subheader("🏦 Verificación de Extracto Bancario del Período")
-    st.success(
-        "Extracto bancario del período seleccionado verificado y conciliado al"
-        " 100%."
-    )
+    if nombre_informe == "Reporte Consolidado Ventas vs Acreditaciones":
+        st.subheader("📊 Resumen Consolidado por Período")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Bruto Ventas", "$ 0,00")
+        c2.metric("Total Liquidado", "$ 0,00")
+        c3.metric("Acreditado en Banco", "$ 0,00")
+        c4.metric("Pendiente de Cobro", "$ 0,00")
 
-  # Botón de Descarga HTML Oficial con el rango de fechas dinámico
-  st.markdown("<br>", unsafe_allow_html=True)
-  html_reporte = f"""
-    <html>
-    <head>
-        <style>
-            body {{ font-family: Helvetica, Arial, sans-serif; color: #333; margin: 30px; }}
-            h1 {{ color: #1e3a8a; text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; font-size: 18px; }}
-            .header-info {{ margin-bottom: 20px; font-size: 12px; }}
-            p {{ font-size: 13px; }}
-        </style>
-    </head>
-    <body>
-        <h1>MUEBLERÍA CASTILLO DE ORO - {nombre_informe.upper()}</h1>
-        <div class="header-info">
-            <p><strong>Período Auditado:</strong> {fecha_desde.strftime('%d/%m/%Y')} al {fecha_hasta.strftime('%d/%m/%Y')}</p>
-            <p><strong>Fecha de Emisión:</strong> {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}</p>
-            <p><strong>Estado:</strong> Documento Oficial Inalterable (Estudio Contable)</p>
-        </div>
-        <p>Informe histórico generado y filtrado correctamente para auditoría contable.</p>
-    </body>
-    </html>
-    """
-  b64 = base64.b64encode(html_reporte.encode()).decode()
-  filename = f"{nombre_informe.replace(' ', '_')}_{fecha_desde.strftime('%Y%m%d')}_al_{fecha_hasta.strftime('%Y%m%d')}.html"
-  href = f'<a href="data:text/html;base64,{b64}" download="{filename}" target="_blank" style="font-size:15px; font-weight:bold; padding:10px 18px; background-color:#1e3a8a; color:white; text-decoration:none; border-radius:5px;">📥 Descargar Informe Oficial del Período</a>'
-  st.markdown(href, unsafe_allow_html=True)
+    elif nombre_informe == "Reporte de Deducciones y Aranceles":
+        st.subheader("🧾 Detalle de Aranceles e Impuestos del Período")
+        df_ded = pd.DataFrame({
+            "Concepto": [
+                "Aranceles",
+                "Costo Financiación / Cuotas",
+                "IVA 21%",
+                "Percepciones IVA / SIRTAC",
+                "Total Deducciones",
+            ],
+            "Importe ($)": [0.0, 0.0, 0.0, 0.0, 0.0],
+        })
+        st.table(df_ded)
+
+    elif nombre_informe == "Reporte de Pendientes de Acreditación":
+        st.subheader("⏳ Listado de Fondos en Tránsito a la Fecha")
+        st.write("Sin datos cargados todavía para este período.")
+
+    elif nombre_informe == "Reporte de Conciliación Bancaria":
+        st.subheader("🏦 Verificación de Extracto Bancario del Período")
+        st.write("Sin datos cargados todavía para este período.")
+
+    # --- DESCARGA DEL INFORME (método confiable) ---
+    html_reporte = f"""<html>
+<head><meta charset="utf-8">
+<style>
+  body {{ font-family: Helvetica, Arial, sans-serif; color: #333; margin: 30px; }}
+  h1 {{ color: #1e3a8a; text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 10px; font-size: 18px; }}
+  .header-info {{ margin-bottom: 20px; font-size: 12px; }}
+  p {{ font-size: 13px; }}
+</style></head>
+<body>
+  <h1>MUEBLERÍA CASTILLO DE ORO - {nombre_informe.upper()}</h1>
+  <div class="header-info">
+    <p><strong>Período Auditado:</strong> {fecha_desde.strftime('%d/%m/%Y')} al {fecha_hasta.strftime('%d/%m/%Y')}</p>
+    <p><strong>Fecha de Emisión:</strong> {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}</p>
+    <p><strong>Estado:</strong> Documento Oficial (Estudio Contable)</p>
+  </div>
+  <p>Informe histórico generado y filtrado para auditoría contable.</p>
+</body></html>"""
+
+    nombre_archivo = (
+        f"{nombre_informe.replace(' ', '_')}_"
+        f"{fecha_desde.strftime('%Y%m%d')}_al_{fecha_hasta.strftime('%Y%m%d')}.html"
+    )
+    st.download_button(
+        "📥 Descargar Informe Oficial del Período",
+        data=html_reporte.encode("utf-8"),
+        file_name=nombre_archivo,
+        mime="text/html",
+        type="primary",
+    )
