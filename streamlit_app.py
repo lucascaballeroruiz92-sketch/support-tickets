@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS liquidacion_impuestos (
     impuesto TEXT,
     monto REAL
 );
+CREATE TABLE IF NOT EXISTS liquidacion_filas (
+    liquidacion_id INTEGER,
+    fecha TEXT,
+    monto REAL
+);
+CREATE TABLE IF NOT EXISTS liquidacion_comprobantes (
+    liquidacion_id INTEGER,
+    pv TEXT,
+    numero TEXT
+);
 CREATE TABLE IF NOT EXISTS actividad (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     momento TEXT, usuario TEXT, accion TEXT, detalle TEXT
@@ -285,14 +295,11 @@ def extraer_liquidacion_pdf(archivo):
             datos["f_plat"] = nombre
             break
 
-    filas = filas_por_fecha(texto)
-    if filas:
-        datos["f_facturas"], datos["f_cruce"] = cruzar_por_dia(filas)
-        datos["f_filas"] = len(filas)
-    else:
-        datos["f_facturas"] = facturas_en_texto(texto, datos.get("f_bruto"))
-    if not datos["f_facturas"]:
-        avisos.append("No se encontró ninguna factura de AFIP que coincida. Vincúlala a mano en Conciliación Bancaria.")
+    # Solo se guardan las filas y comprobantes; el cruce con AFIP se hace
+    # cuando la factura ya está importada (ver vincular_liquidacion).
+    datos["f_filas"] = filas_por_fecha(texto)
+    datos["f_comprobantes"] = COMPROBANTE_RE.findall(texto)
+    datos["f_facturas"] = []
 
     # Control de coherencia: bruto - deducciones debe dar el neto informado
     if {"f_bruto", "f_neto"} <= datos.keys():
@@ -302,6 +309,50 @@ def extraer_liquidacion_pdf(archivo):
             avisos.append(f"El PDF no cierra: bruto − deducciones − neto da {fmt(dif)}. Revisa los importes.")
 
     return datos, avisos
+
+
+def vincular_liquidacion(liq_id):
+    """Vincula facturas ya importadas de AFIP a una liquidación guardada.
+    1) Por número de comprobante leído del PDF. 2) Si no hay, por día y monto."""
+    ids = set()
+    comp = consultar("SELECT pv, numero FROM liquidacion_comprobantes WHERE liquidacion_id=?", (liq_id,))
+    for r in comp.itertuples():
+        f = consultar(
+            """SELECT id FROM facturas
+               WHERE CAST(punto_venta AS INTEGER)=? AND CAST(numero AS INTEGER)=?
+                 AND id NOT IN (SELECT factura_id FROM liquidacion_factura)""",
+            (int(r.pv), int(r.numero)),
+        )
+        ids.update(f.id.tolist())
+    if not ids:
+        filas_db = consultar("SELECT fecha, monto FROM liquidacion_filas WHERE liquidacion_id=?", (liq_id,))
+        if not filas_db.empty:
+            filas = [
+                {"fecha": datetime.strptime(r.fecha, "%Y-%m-%d").date(), "monto": float(r.monto)}
+                for r in filas_db.itertuples()
+            ]
+            ids_dia, _ = cruzar_por_dia(filas)
+            ids.update(ids_dia)
+    for fid in ids:
+        ejecutar(
+            "INSERT OR IGNORE INTO liquidacion_factura (liquidacion_id, factura_id) VALUES (?,?)",
+            (liq_id, int(fid)),
+        )
+    return len(ids)
+
+
+def vincular_pendientes(usuario):
+    """Intenta vincular todas las liquidaciones que todavía no tienen factura."""
+    pend = consultar(
+        "SELECT id FROM liquidaciones WHERE id NOT IN (SELECT liquidacion_id FROM liquidacion_factura)"
+    )
+    total = 0
+    for liq_id in pend.id.tolist():
+        n = vincular_liquidacion(int(liq_id))
+        if n:
+            total += n
+            registrar("Vinculación automática", f"Liquidación #{liq_id}: {n} factura(s) vinculadas")
+    return total
 
 
 def guardar_liquidacion_auto(datos, usuario, nombre_pdf):
@@ -316,8 +367,8 @@ def guardar_liquidacion_auto(datos, usuario, nombre_pdf):
     plataforma = datos.get("f_plat", "Sin especificar")
     lote = datos.get("f_lote", "")
     nota = f"Cargado desde PDF: {nombre_pdf}."
-    for linea_cruce in datos.get("f_cruce", []):
-        nota += f" {linea_cruce}."
+    if not datos.get("f_facturas"):
+        nota += " Pendiente de vincular con AFIP."
     if datos.get("f_neto"):
         nota += f" Neto según PDF: {fmt(datos['f_neto'])}."
     liq_id = ejecutar(
@@ -334,13 +385,19 @@ def guardar_liquidacion_auto(datos, usuario, nombre_pdf):
             usuario, ahora(), usuario, ahora(),
         ),
     )
-    for fid in datos.get("f_facturas", []):
+    for f in datos.get("f_filas", []):
         ejecutar(
-            "INSERT OR IGNORE INTO liquidacion_factura (liquidacion_id, factura_id) VALUES (?,?)",
-            (liq_id, fid),
+            "INSERT INTO liquidacion_filas (liquidacion_id, fecha, monto) VALUES (?,?,?)",
+            (liq_id, f["fecha"].isoformat(), f["monto"]),
         )
-    registrar("Liquidación automática", f"#{liq_id} {plataforma} desde {nombre_pdf}, {len(datos.get('f_facturas', []))} factura(s) vinculadas")
-    return liq_id, estado
+    for pv, nro in datos.get("f_comprobantes", []):
+        ejecutar(
+            "INSERT INTO liquidacion_comprobantes (liquidacion_id, pv, numero) VALUES (?,?,?)",
+            (liq_id, pv, nro),
+        )
+    n_vinc = vincular_liquidacion(liq_id)
+    registrar("Liquidación automática", f"#{liq_id} {plataforma} desde {nombre_pdf}, {n_vinc} factura(s) vinculadas")
+    return liq_id, estado, n_vinc
 
 
 def selector_rango(key):
@@ -504,8 +561,12 @@ if vista == "Carga de Registro de Ventas":
             else:
                 df = pd.read_csv(archivo, sep=None, engine="python", dtype=str)
             nuevas, total = importar_facturas(df, usuario)
+            n_vinc_afip = vincular_pendientes(usuario)
             registrar("Importación AFIP", f"{nuevas} facturas nuevas de {total} en {archivo.name}")
-            st.success(f"Se incorporaron {nuevas} facturas nuevas. Las duplicadas se omitieron.")
+            st.success(
+                f"Se incorporaron {nuevas} facturas nuevas. Facturas vinculadas automáticamente "
+                f"con liquidaciones pendientes: {n_vinc_afip}."
+            )
         except Exception as e:
             st.error(f"No se pudo importar: {e}")
 
@@ -628,16 +689,20 @@ if vista == "Liquidaciones" and sub_liq == "📤 Cargar liquidación":
             elif not ya.empty:
                 st.warning(f"Ya existe una liquidación con el lote {lote} (#{int(ya.id.iloc[0])}). No se duplicó.")
             else:
-                liq_id, estado = guardar_liquidacion_auto(datos, usuario, pdf_liq.name)
+                liq_id, estado, n_vinc = guardar_liquidacion_auto(datos, usuario, pdf_liq.name)
                 st.success(
                     f"Liquidación #{liq_id} guardada. Facturas vinculadas: "
-                    f"{len(datos.get('f_facturas', []))}. Estado: {estado}."
+                    f"{n_vinc}. Estado: {estado}."
                 )
                 for a in avisos:
                     st.warning(a)
                 st.rerun()
         except Exception as e:
             st.error(f"No se pudo procesar el PDF: {e}")
+
+    if st.button("Re-intentar vincular liquidaciones pendientes"):
+        n_pend = vincular_pendientes(usuario)
+        st.success(f"Facturas vinculadas: {n_pend}.")
 
     st.subheader("2. Carga manual (solo si el PDF no se pudo leer)")
     facs = consultar("SELECT id, fecha, tipo, punto_venta, numero, total FROM facturas ORDER BY fecha DESC")
