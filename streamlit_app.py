@@ -395,8 +395,13 @@ def guardar_liquidacion_auto(datos, usuario, nombre_pdf):
             "INSERT INTO liquidacion_comprobantes (liquidacion_id, pv, numero) VALUES (?,?,?)",
             (liq_id, pv, nro),
         )
-    n_vinc = vincular_liquidacion(liq_id)
-    registrar("Liquidación automática", f"#{liq_id} {plataforma} desde {nombre_pdf}, {n_vinc} factura(s) vinculadas")
+    # La liquidación ya quedó guardada. La vinculación con AFIP es un paso aparte
+    # que no debe impedir el guardado.
+    registrar("Liquidación automática", f"#{liq_id} {plataforma} desde {nombre_pdf}")
+    try:
+        n_vinc = vincular_liquidacion(liq_id)
+    except Exception:
+        n_vinc = 0
     return liq_id, estado, n_vinc
 
 
@@ -696,9 +701,10 @@ if vista == "Liquidaciones" and sub_liq == "📤 Cargar liquidación":
                 )
                 for a in avisos:
                     st.warning(a)
-                st.rerun()
         except Exception as e:
+            import traceback
             st.error(f"No se pudo procesar el PDF: {e}")
+            st.code(traceback.format_exc())
 
     if st.button("Re-intentar vincular liquidaciones pendientes"):
         n_pend = vincular_pendientes(usuario)
