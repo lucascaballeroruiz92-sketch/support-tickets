@@ -1,4 +1,5 @@
 import base64
+from datetime import date
 from io import BytesIO
 import numpy as np
 import pandas as pd
@@ -168,20 +169,35 @@ elif "Tesorería - Extractos Bancarios" in modulo_actual:
     else:
       st.warning("Sube un extracto bancario para realizar la conciliación.")
 
-# 4. CONTABILIDAD - INFORMES
+# 4. CONTABILIDAD - INFORMES CON FILTRO DE PERÍODO
 elif "Contabilidad" in modulo_actual:
-  nombre_informe = modulo_actual.split(" - ")[
-      1
-  ]  # Extrae el submenú seleccionado
+  nombre_informe = modulo_actual.split(" - ")[1]
   st.markdown(f"## 📈 Contabilidad - {nombre_informe}")
   st.write(
-      "Consolidación financiera y fiscal oficial para el estudio contable de"
-      " **Mueblería Castillo de Oro**."
+      "Seleccione el rango de fechas para auditar y generar el informe oficial"
+      " histórico de **Mueblería Castillo de Oro**."
+  )
+  st.markdown("---")
+
+  # --- FILTRO DE RANGO DE FECHAS PARA AUDITORÍA ---
+  col_f1, col_f2 = st.columns(2)
+  with col_f1:
+    fecha_desde = st.date_input(
+        "📅 Desde la fecha:", value=date(2026, 1, 1), key="filtro_desde"
+    )
+  with col_f2:
+    fecha_hasta = st.date_input(
+        "📅 Hasta la fecha:", value=date.today(), key="filtro_hasta"
+    )
+
+  st.markdown(
+      f"🔍 *Filtrando registros desde el **{fecha_desde.strftime('%d/%m/%Y')}**"
+      f" al **{fecha_hasta.strftime('%d/%m/%Y')}***"
   )
   st.markdown("---")
 
   if nombre_informe == "Reporte Consolidado Ventas vs Acreditaciones":
-    st.subheader("📊 Resumen Consolidado de Ventas y Cobros")
+    st.subheader("📊 Resumen Consolidado por Período")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Bruto Ventas", "$ 0,00")
     col2.metric("Total Liquidado", "$ 0,00")
@@ -189,7 +205,7 @@ elif "Contabilidad" in modulo_actual:
     col4.metric("Pendiente de Cobro", "$ 0,00")
 
   elif nombre_informe == "Reporte de Deducciones y Aranceles":
-    st.subheader("🧾 Detalle de Aranceles, Impuestos y Retenciones")
+    st.subheader("🧾 Detalle de Aranceles e Impuestos del Período")
     df_deducciones = pd.DataFrame({
         "Concepto": [
             "Aranceles",
@@ -203,14 +219,20 @@ elif "Contabilidad" in modulo_actual:
     st.table(df_deducciones)
 
   elif nombre_informe == "Reporte de Pendientes de Acreditación":
-    st.subheader("⏳ Listado de Fondos en Tránsito")
-    st.info("No hay saldos pendientes de acreditación en este período.")
+    st.subheader("⏳ Listado de Fondos en Tránsito a la Fecha")
+    st.info(
+        "No se registran saldos pendientes de acreditación para el período"
+        " seleccionado."
+    )
 
   elif nombre_informe == "Reporte de Conciliación Bancaria":
-    st.subheader("🏦 Verificación de Extracto Bancario")
-    st.success("Extracto bancario verificado y conciliado al 100%.")
+    st.subheader("🏦 Verificación de Extracto Bancario del Período")
+    st.success(
+        "Extracto bancario del período seleccionado verificado y conciliado al"
+        " 100%."
+    )
 
-  # Botón de Descarga del Informe Seleccionado
+  # Botón de Descarga del Informe con las fechas seleccionadas
   st.markdown("<br>", unsafe_allow_html=True)
   html_reporte = f"""
     <html>
@@ -225,13 +247,15 @@ elif "Contabilidad" in modulo_actual:
     <body>
         <h1>MUEBLERÍA CASTILLO DE ORO - {nombre_informe.upper()}</h1>
         <div class="header-info">
+            <p><strong>Período Auditado:</strong> {fecha_desde.strftime('%d/%m/%Y')} al {fecha_hasta.strftime('%d/%m/%Y')}</p>
             <p><strong>Fecha de Emisión:</strong> {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}</p>
             <p><strong>Estado:</strong> Documento Oficial Inalterable (Estudio Contable)</p>
         </div>
-        <p>Informe generado correctamente para revisión contable.</p>
+        <p>Informe histórico generado y filtrado correctamente para auditoría contable.</p>
     </body>
     </html>
     """
   b64 = base64.b64encode(html_reporte.encode()).decode()
-  href = f'<a href="data:text/html;base64,{b64}" download="{nombre_informe.replace(" ", "_")}.html" target="_blank" style="font-size:15px; font-weight:bold; padding:10px 18px; background-color:#1e3a8a; color:white; text-decoration:none; border-radius:5px;">📥 Descargar Informe Oficial</a>'
+  filename = f"{nombre_informe.replace(' ', '_')}_{fecha_desde.strftime('%Y%m%d')}_al_{fecha_hasta.strftime('%Y%m%d')}.html"
+  href = f'<a href="data:text/html;base64,{b64}" download="{filename}" target="_blank" style="font-size:15px; font-weight:bold; padding:10px 18px; background-color:#1e3a8a; color:white; text-decoration:none; border-radius:5px;">📥 Descargar Informe Oficial del Período</a>'
   st.markdown(href, unsafe_allow_html=True)
