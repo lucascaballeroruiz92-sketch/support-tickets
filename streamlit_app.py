@@ -704,7 +704,7 @@ def vista_ventas():
     st.markdown("#### Facturas cargadas")
     d, h = selector_rango("fact")
     facturas = consultar(
-        """SELECT fecha, tipo, punto_venta, numero, razon_social, neto, iva, total, cargado_por
+        """SELECT fecha, punto_venta, numero, razon_social, neto, iva, total, cargado_por
            FROM facturas WHERE fecha BETWEEN ? AND ? ORDER BY fecha DESC""",
         (d, h),
     )
