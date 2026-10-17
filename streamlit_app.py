@@ -36,25 +36,49 @@ if not st.session_state["autenticado"]:
       st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
-# --- MENÚ DE NAVEGACIÓN PRINCIPAL ---
+# --- MENÚ DE MÓDULOS PRINCIPALES CON DESPLEGABLES ---
 st.sidebar.success(f"Usuario: {st.session_state.get('usuario_actual')}")
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
 
-# Menú desplegable unificado y limpio para evitar bucles
-menu_opciones = [
-    "📊 Ventas",
-    "💰 Tesorería - Liquidaciones",
-    "💰 Tesorería - Extractos Bancarios",
-    "📈 Contabilidad - Reporte Consolidado Ventas vs Acreditaciones",
-    "📈 Contabilidad - Reporte de Deducciones y Aranceles",
-    "📈 Contabilidad - Reporte de Pendientes de Acreditación",
-    "📈 Contabilidad - Reporte de Conciliación Bancaria",
-]
+if "modulo_activo" not in st.session_state:
+  st.session_state["modulo_activo"] = "Ventas"
 
-seleccion = st.sidebar.radio(
-    "Seleccione una opción:", menu_opciones, key="radio_navegacion_principal"
-)
+# 1. Módulo Ventas (Botón directo)
+if st.sidebar.button(
+    "📊 Ventas", use_container_width=True, key="btn_menu_ventas"
+):
+  st.session_state["modulo_activo"] = "Ventas"
+  st.rerun()
+
+# 2. Módulo Tesorería (Con submenú desplegable)
+with st.sidebar.expander("💰 Tesorería", expanded=False):
+  sub_tesoreria = st.radio(
+      "Seleccione una opción:",
+      ["Liquidaciones", "Extractos Bancarios"],
+      key="radio_sub_tesoreria",
+  )
+  nuevo_estado = f"Tesorería - {sub_tesoreria}"
+  if st.session_state["modulo_activo"] != nuevo_estado:
+    st.session_state["modulo_activo"] = nuevo_estado
+    st.rerun()
+
+# 3. Módulo Contabilidad (Con submenú desplegable de informes)
+with st.sidebar.expander("📈 Contabilidad", expanded=False):
+  sub_contabilidad = st.radio(
+      "Seleccione un informe:",
+      [
+          "Reporte Consolidado Ventas vs Acreditaciones",
+          "Reporte de Deducciones y Aranceles",
+          "Reporte de Pendientes de Acreditación",
+          "Reporte de Conciliación Bancaria",
+      ],
+      key="radio_sub_contabilidad",
+  )
+  nuevo_estado_cont = f"Contabilidad - {sub_contabilidad}"
+  if st.session_state["modulo_activo"] != nuevo_estado_cont:
+    st.session_state["modulo_activo"] = nuevo_estado_cont
+    st.rerun()
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🚪 Cerrar Sesión"):
@@ -62,9 +86,10 @@ if st.sidebar.button("🚪 Cerrar Sesión"):
   st.rerun()
 
 # --- CONTENIDO SEGÚN LA SELECCIÓN ---
+modulo_actual = st.session_state["modulo_activo"]
 
-# 1. MÓDULO DE VENTAS
-if seleccion == "📊 Ventas":
+# A. VENTAS
+if modulo_actual == "Ventas":
   st.markdown("## 📊 Módulo de Ventas")
   st.write(
       "Gestión de facturación, comprobantes comerciales y registro de bruto"
@@ -88,8 +113,8 @@ if seleccion == "📊 Ventas":
     else:
       st.warning("Selecciona un archivo de ventas para registrar.")
 
-# 2. TESORERÍA - LIQUIDACIONES
-elif seleccion == "💰 Tesorería - Liquidaciones":
+# B. TESORERÍA - LIQUIDACIONES
+elif "Tesorería - Liquidaciones" in modulo_actual:
   st.markdown("## 💰 Tesorería - Liquidaciones")
   st.write(
       "Bandeja unificada de carga de liquidaciones y comprobantes para"
@@ -117,8 +142,8 @@ elif seleccion == "💰 Tesorería - Liquidaciones":
     else:
       st.warning("Sube al menos un archivo para procesar.")
 
-# 3. TESORERÍA - EXTRACTOS BANCARIOS
-elif seleccion == "💰 Tesorería - Extractos Bancarios":
+# C. TESORERÍA - EXTRACTOS BANCARIOS
+elif "Tesorería - Extractos Bancarios" in modulo_actual:
   st.markdown("## 💰 Tesorería - Extractos Bancarios")
   st.write(
       "Carga de extractos bancarios para automatizar el cálculo y la"
@@ -146,9 +171,9 @@ elif seleccion == "💰 Tesorería - Extractos Bancarios":
     else:
       st.warning("Sube un extracto bancario para realizar la conciliación.")
 
-# 4. CONTABILIDAD - INFORMES CON RANGO DE FECHAS
-elif "📈 Contabilidad" in seleccion:
-  nombre_informe = seleccion.split(" - ")[1]
+# D. CONTABILIDAD - INFORMES CON RANGO DE FECHAS
+elif "Contabilidad" in modulo_actual:
+  nombre_informe = modulo_actual.split(" - ")[1]
   st.markdown(f"## 📈 Contabilidad - {nombre_informe}")
   st.write(
       "Seleccione el rango de fechas para auditar y generar el informe oficial"
