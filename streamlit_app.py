@@ -153,47 +153,13 @@ def calcular(bruto, com, cf, iva_com, ret, neto_acred, fecha_acred):
 
 
 # ======================= LECTURA DE PDF DE LIQUIDACIONES =======================
-PATRONES = {
-    "f_bruto": [r"total presentado", r"bruto", r"importe total", r"total ventas", r"venta total", r"total cupones"],
-    "f_com": [r"arancel", r"comision"],
-    "f_cf": [r"interes", r"financiacion", r"costo financiero", r"cargo financiero"],
-    "f_iva": [r"iva 21", r"iva 10", r"iva s/ comision", r"iva comision"],
-    "f_ret": [r"retencion", r"percepcion", r"sirtac", r"iibb", r"ingresos brutos", r"bienes durables", r"per\. ?iva"],
-    "f_neto": [r"neto (liquidado|a acreditar|acreditado|a pagar|a cobrar)", r"total recibido", r"importe neto"],
-}
 NUM_RE = re.compile(r"-?\$?\s?\d{1,3}(?:\.\d{3})*,\d{2}")
 FECHA_RE = re.compile(r"\b(\d{2})[/.-](\d{2})[/.-](\d{4})\b")
-COMPROBANTE_RE = re.compile(r"\b(\d{4,5})\s?-\s?(\d{6,8})\b")
 PLAT_CLAVES = {
     "naranja": "Naranja X", "banco naci": "Banco Nación", "mercado pago": "Mercado Pago",
     "payway": "Payway", "fiserv": "Fiserv", "+pagos": "+Pagos", "credicoop": "Banco Credicoop",
     "galicia": "Banco Galicia", "santander": "Banco Santander", "bbva": "BBVA", "macro": "Banco Macro",
 }
-
-
-def facturas_en_texto(texto, bruto):
-    """Busca facturas de AFIP que coincidan con el PDF.
-    1) Por número de comprobante que aparezca en el PDF (punto de venta - número).
-    2) Si no aparece, por monto: factura sin liquidar con total igual al bruto."""
-    ids = set()
-    for pv, nro in COMPROBANTE_RE.findall(texto):
-        f = consultar(
-            """SELECT id FROM facturas
-               WHERE CAST(punto_venta AS INTEGER)=? AND CAST(numero AS INTEGER)=?""",
-            (int(pv), int(nro)),
-        )
-        ids.update(f.id.tolist())
-    if not ids and bruto:
-        f = consultar(
-            """SELECT id FROM facturas
-               WHERE ABS(total - ?) <= ?
-                 AND id NOT IN (SELECT factura_id FROM liquidacion_factura)""",
-            (float(bruto), TOLERANCIA),
-        )
-        ids.update(f.id.tolist())
-    return sorted(int(i) for i in ids)
-
-
 FILA_FECHA_MONTO_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\b.*?(\d{1,3}(?:\.\d{3})*,\d{2})")
 
 
@@ -254,8 +220,16 @@ def cruzar_por_dia(filas):
     return sorted(ids), textos
 
 
+def importe_en(linea, primero=False):
+    """Devuelve el último (o primer) importe de la línea, con su signo."""
+    nums = NUM_RE.findall(linea)
+    if not nums:
+        return None
+    return num(nums[0] if primero else nums[-1])
+
+
 def extraer_liquidacion_pdf(archivo):
-    """Lee el PDF y devuelve (datos, avisos). Incluye las facturas detectadas en 'f_facturas'."""
+    """Lee el PDF de Naranja y de otras plataformas por etiqueta de línea."""
     archivo.seek(0)
     with pdfplumber.open(archivo) as pdf:
         texto = "\n".join((p.extract_text() or "") for p in pdf.pages)
@@ -263,31 +237,81 @@ def extraer_liquidacion_pdf(archivo):
         raise ValueError("El PDF no tiene texto seleccionable (puede ser escaneado).")
 
     lineas = [l.strip() for l in texto.splitlines() if l.strip()]
+    ll = [sin_acentos(l) for l in lineas]
     datos, avisos = {}, []
 
-    for campo, patrones in PATRONES.items():
-        montos = []
-        for linea in lineas:
-            ll = sin_acentos(linea)
-            if any(re.search(p, ll) for p in patrones):
-                nums = NUM_RE.findall(linea)
-                if nums:
-                    montos.append(abs(num(nums[-1])))
-        if montos:
-            datos[campo] = montos[0] if campo in ("f_bruto", "f_neto") else round(sum(montos), 2)
-        else:
-            avisos.append(f"No se encontró el importe de '{campo}'.")
+    def sumar(patron, excluir=("total",)):
+        """Suma (en valor absoluto) los importes de las líneas que empiezan con el patrón."""
+        total, hallado = 0.0, False
+        for l, s in zip(lineas, ll):
+            if re.search(patron, s) and not any(e in s for e in excluir):
+                v = importe_en(l)
+                if v is not None:
+                    total += abs(v)
+                    hallado = True
+        return round(total, 2) if hallado else None
 
-    m = FECHA_RE.search(texto)
-    if m:
+    def valor_siguiente(patron):
+        """Importe de la línea del rótulo o, si el rótulo va solo, de la línea siguiente."""
+        for i, s in enumerate(ll):
+            if re.search(patron, s):
+                v = importe_en(lineas[i])
+                if v is None and i + 1 < len(lineas):
+                    v = importe_en(lineas[i + 1])
+                if v is not None:
+                    return abs(v)
+        return None
+
+    # Bruto: primera línea 'Totales' (primer importe de la fila)
+    bruto = None
+    for l, s in zip(lineas, ll):
+        if re.match(r"^totales\b", s):
+            bruto = importe_en(l, primero=True)
+            if bruto is not None:
+                break
+    if bruto is None:
+        bruto = valor_siguiente(r"total presentado|importe total|total ventas|venta total|total cupones")
+    if bruto is not None:
+        datos["f_bruto"] = abs(bruto)
+    else:
+        avisos.append("No se encontró el importe de 'bruto'.")
+
+    # Comisiones: arancel menos bonificación (la bonificación aumenta el neto)
+    arancel = sumar(r"^arancel")
+    bonif = sumar(r"^bonificacion")
+    if arancel is not None or bonif is not None:
+        datos["f_com"] = round((arancel or 0) - (bonif or 0), 2)
+    cf = sumar(r"^interes|^financiacion|^costo financiero|^cargo financiero")
+    if cf is not None:
+        datos["f_cf"] = cf
+    iva = sumar(r"^iva\b")
+    if iva is not None:
+        datos["f_iva"] = iva
+    ret = sumar(r"^(sirtac|percepcion|retencion|iibb|ingresos brutos|bienes durables|per\. ?iva)")
+    if ret is not None:
+        datos["f_ret"] = ret
+
+    neto = valor_siguiente(r"^neto liquidado|total recibido|neto a (pagar|acreditar|cobrar)")
+    if neto is not None:
+        datos["f_neto"] = neto
+    else:
+        avisos.append("No se encontró el neto liquidado.")
+
+    m = re.search(r"Fecha de Pago\s*:?\s*(\d{2}/\d{2}/\d{4})", texto, re.I)
+    fs = m.group(1) if m else None
+    if not fs:
+        m = FECHA_RE.search(texto)
+        fs = m.group(0) if m else None
+    if fs:
         try:
-            datos["f_fliq"] = date(int(m[3]), int(m[2]), int(m[1]))
-        except ValueError:
+            d_, mo_, a_ = re.split(r"[/.-]", fs)
+            datos["f_fliq"] = date(int(a_), int(mo_), int(d_))
+        except (ValueError, TypeError):
             pass
 
-    m = re.search(r"(?:liquidacion|lote|operacion|comprobante)\w*\.?\s*(?:n[º°o.]|nro\.?|numero)?\s*:?\s*(\d[\d-]{3,})", sin_acentos(texto))
+    m = re.search(r"Tipo y N\S*\s*:?\s*([A-Za-z]-\d{4}-\d+)", texto, re.I)
     if m:
-        datos["f_lote"] = m[1]
+        datos["f_lote"] = m.group(1)
 
     tl = sin_acentos(texto)
     for clave, nombre in PLAT_CLAVES.items():
@@ -295,13 +319,10 @@ def extraer_liquidacion_pdf(archivo):
             datos["f_plat"] = nombre
             break
 
-    # Solo se guardan las filas y comprobantes; el cruce con AFIP se hace
-    # cuando la factura ya está importada (ver vincular_liquidacion).
     datos["f_filas"] = filas_por_fecha(texto)
-    datos["f_comprobantes"] = COMPROBANTE_RE.findall(texto)
+    datos["f_comprobantes"] = []
     datos["f_facturas"] = []
 
-    # Control de coherencia: bruto - deducciones debe dar el neto informado
     if {"f_bruto", "f_neto"} <= datos.keys():
         deducc = sum(datos.get(k, 0) for k in ("f_com", "f_cf", "f_iva", "f_ret"))
         dif = datos["f_bruto"] - deducc - datos["f_neto"]
@@ -585,10 +606,6 @@ if vista == "Carga de Registro de Ventas":
     )
     st.caption(f"{len(facturas)} facturas en el rango | Total: {fmt(facturas.total.sum())}")
     st.dataframe(facturas, hide_index=True)
-
-
-def fl(x):
-    return 0.0 if pd.isna(x) else float(x)
 
 
 def vista_planilla():
