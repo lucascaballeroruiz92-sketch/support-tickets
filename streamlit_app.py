@@ -207,4 +207,7 @@ elif modulo_seleccionado == "Contabilidad":
     </html>
     """
 
-  b64 = base64.b64encode(html
+  b64 = base64.b64encode(html_reporte.encode()).decode()
+  href = f'<a href="data:text/html;base64,{b64}" download="Reporte_Contador_Castillo_de_Oro.html" target="_blank" style="font-size:16px; font-weight:bold; padding:10px 20px; background-color:#1e3a8a; color:white; text-decoration:none; border-radius:5px;">📥 Descargar Reporte Oficial para el Contador</a>'
+  st.markdown("<br>", unsafe_allow_html=True)
+  st.markdown(href, unsafe_allow_html=True)
