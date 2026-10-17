@@ -308,6 +308,7 @@ def extraer_liquidacion_pdf(archivo):
         if abs(dif) > TOLERANCIA:
             avisos.append(f"El PDF no cierra: bruto − deducciones − neto da {fmt(dif)}. Revisa los importes.")
 
+    datos["f_texto"] = texto
     return datos, avisos
 
 
@@ -691,6 +692,8 @@ if vista == "Liquidaciones" and sub_liq == "📤 Cargar liquidación":
             ) if lote else pd.DataFrame()
             if not datos.get("f_bruto"):
                 st.error("No se encontró el bruto en el PDF. Usa la carga manual de abajo.")
+                with st.expander("Ver texto que la app leyó del PDF (para ajustar la lectura)"):
+                    st.text(datos.get("f_texto", ""))
             elif not ya.empty:
                 st.warning(f"Ya existe una liquidación con el lote {lote} (#{int(ya.id.iloc[0])}). No se duplicó.")
             else:
