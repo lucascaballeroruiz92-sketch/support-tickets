@@ -47,14 +47,16 @@ modulo_seleccionado = st.sidebar.radio(
         "Tesorería",
         "Contabilidad",
     ],
+    key="radio_modulo_principal",
 )
 
 subseccion_tesoreria = None
 if modulo_seleccionado == "Tesorería":
   st.sidebar.markdown("---")
-  st.sidebar.subheader("💰 Sección Tesorería")
   subseccion_tesoreria = st.sidebar.radio(
-      "Seleccione una opción:", ["Liquidaciones", "Extractos Bancarios"]
+      "📁 Submenú Tesorería:",
+      ["Liquidaciones", "Extractos Bancarios"],
+      key="radio_subseccion_tesoreria",
   )
 
 st.sidebar.markdown("---")
@@ -205,7 +207,4 @@ elif modulo_seleccionado == "Contabilidad":
     </html>
     """
 
-  b64 = base64.b64encode(html_reporte.encode()).decode()
-  href = f'<a href="data:text/html;base64,{b64}" download="Reporte_Contador_Castillo_de_Oro.html" target="_blank" style="font-size:16px; font-weight:bold; padding:10px 20px; background-color:#1e3a8a; color:white; text-decoration:none; border-radius:5px;">📥 Descargar Reporte Oficial para el Contador</a>'
-  st.markdown("<br>", unsafe_allow_html=True)
-  st.markdown(href, unsafe_allow_html=True)
+  b64 = base64.b64encode(html
