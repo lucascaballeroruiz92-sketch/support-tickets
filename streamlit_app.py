@@ -16,13 +16,10 @@ if "autenticado" not in st.session_state:
   st.session_state["autenticado"] = False
 
 # --- BARRA LATERAL (SIDEBAR) - AUTENTICACIÓN Y NAVEGACIÓN ---
-st.sidebar.image(
-    "https://img.icons8.com/color/96/wooden-furniture.png", width=70
-)
 st.sidebar.title("Mueblería Castillo de Oro")
-st.sidebar.markdown("---")
 
 if not st.session_state["autenticado"]:
+  st.sidebar.markdown("---")
   st.sidebar.subheader("🔒 Acceso al Sistema")
   usuario = st.sidebar.text_input("Usuario", key="user_login")
   password = st.sidebar.text_input("Contraseña", type="password", key="pass_login")
@@ -36,11 +33,11 @@ if not st.session_state["autenticado"]:
       st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
-# --- USUARIO Y CIERRE DE SESIÓN VISIBLE ARRIBA ---
-col_u1, col_u2 = st.sidebar.columns([3, 2])
-with col_u1:
+# --- CABECERA SIDEBAR: USUARIO Y SALIR ---
+col_s1, col_s2 = st.sidebar.columns([2, 1])
+with col_s1:
   st.write(f"👤 **{st.session_state.get('usuario_actual')}**")
-with col_u2:
+with col_s2:
   if st.button("🚪 Salir", key="btn_logout_top"):
     st.session_state["autenticado"] = False
     st.rerun()
@@ -165,7 +162,7 @@ elif modulo_actual == "Tesorería - Extractos Bancarios":
     for ext in extractos_files:
       st.text(f"🏦 Extracto detectado: {ext.name}")
 
-  if st.button("Conciliar con Extractos Bancarios", type="primary"):
+  if st.button("Conciliarกับ Extractos Bancarios", type="primary"):
     if extractos_files:
       st.success(
           "¡Extractos conciliados correctamente con el módulo de contabilidad!"
