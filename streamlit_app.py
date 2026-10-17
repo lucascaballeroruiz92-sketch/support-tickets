@@ -35,33 +35,49 @@ if not st.session_state["autenticado"]:
       st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
-# --- MENÚ DE MÓDULOS PRINCIPALES CON SUBMENÚ ANIDADO ---
+# --- MENÚ DE MÓDULOS PRINCIPALES ---
 st.sidebar.success(f"Usuario: {st.session_state.get('usuario_actual')}")
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
 
-opciones_menu = [
-    "📊 Ventas",
-    "💰 Tesorería - Liquidaciones",
-    "💰 Tesorería - Extractos Bancarios",
-    "📈 Contabilidad",
-]
+if "modulo_activo" not in st.session_state:
+  st.session_state["modulo_activo"] = "Ventas"
 
-opcion_seleccionada = st.sidebar.radio(
-    "Seleccione el Módulo / Tarea:",
-    opciones_menu,
-    key="radio_menu_principal",
-)
+# Botón Módulo Ventas
+if st.sidebar.button(
+    "📊 Ventas", use_container_width=True, key="btn_menu_ventas"
+):
+  st.session_state["modulo_activo"] = "Ventas"
+  st.rerun()
+
+# Desplegable Módulo Tesorería
+with st.sidebar.expander("💰 Tesorería", expanded=True):
+  sub_tesoreria = st.radio(
+      "Seleccione una tarea:",
+      ["Liquidaciones", "Extractos Bancarios"],
+      key="sub_tesoreria_radio",
+  )
+  if st.button("Ir a Tesorería", key="btn_go_tesoreria", type="primary"):
+    st.session_state["modulo_activo"] = f"Tesorería - {sub_tesoreria}"
+    st.rerun()
+
+# Botón Módulo Contabilidad
+if st.sidebar.button(
+    "📈 Contabilidad", use_container_width=True, key="btn_menu_contabilidad"
+):
+  st.session_state["modulo_activo"] = "Contabilidad"
+  st.rerun()
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🚪 Cerrar Sesión"):
   st.session_state["autenticado"] = False
   st.rerun()
 
-# --- CONTENIDO SEGÚN OPCIÓN SELECCIONADA ---
+# --- CONTENIDO SEGÚN MÓDULO Y SUBMÓDULO SELECCIONADO ---
+modulo_actual = st.session_state["modulo_activo"]
 
 # 1. MÓDULO DE VENTAS
-if opcion_seleccionada == "📊 Ventas":
+if modulo_actual == "Ventas":
   st.markdown("## 📊 Módulo de Ventas")
   st.write(
       "Gestión de facturación, comprobantes comerciales y registro de bruto"
@@ -86,7 +102,7 @@ if opcion_seleccionada == "📊 Ventas":
       st.warning("Selecciona un archivo de ventas para registrar.")
 
 # 2. TESORERÍA - LIQUIDACIONES
-elif opcion_seleccionada == "💰 Tesorería - Liquidaciones":
+elif "Tesorería - Liquidaciones" in modulo_actual:
   st.markdown("## 💰 Tesorería - Liquidaciones")
   st.write(
       "Bandeja unificada de carga de liquidaciones y comprobantes para"
@@ -115,7 +131,7 @@ elif opcion_seleccionada == "💰 Tesorería - Liquidaciones":
       st.warning("Sube al menos un archivo para procesar.")
 
 # 3. TESORERÍA - EXTRACTOS BANCARIOS
-elif opcion_seleccionada == "💰 Tesorería - Extractos Bancarios":
+elif "Tesorería - Extractos Bancarios" in modulo_actual:
   st.markdown("## 💰 Tesorería - Extractos Bancarios")
   st.write(
       "Carga de extractos bancarios para automatizar el cálculo y la"
@@ -144,7 +160,7 @@ elif opcion_seleccionada == "💰 Tesorería - Extractos Bancarios":
       st.warning("Sube un extracto bancario para realizar la conciliación.")
 
 # 4. MÓDULO DE CONTABILIDAD
-elif opcion_seleccionada == "📈 Contabilidad":
+elif modulo_actual == "Contabilidad":
   st.markdown("## 📈 Módulo de Contabilidad")
   st.write(
       "Resumen consolidado para **Mueblería Castillo de Oro**. Generación y"
