@@ -15,14 +15,14 @@ st.set_page_config(
 if "autenticado" not in st.session_state:
   st.session_state["autenticado"] = False
 
-if "modulo_activo" not in st.session_state:
-  st.session_state["modulo_activo"] = "Ventas"
-
 # --- BARRA LATERAL (SIDEBAR) - AUTENTICACIÓN Y NAVEGACIÓN ---
+st.sidebar.image(
+    "https://img.icons8.com/color/96/wooden-furniture.png", width=70
+)
 st.sidebar.title("Mueblería Castillo de Oro")
+st.sidebar.markdown("---")
 
 if not st.session_state["autenticado"]:
-  st.sidebar.markdown("---")
   st.sidebar.subheader("🔒 Acceso al Sistema")
   usuario = st.sidebar.text_input("Usuario", key="user_login")
   password = st.sidebar.text_input("Contraseña", type="password", key="pass_login")
@@ -36,61 +36,37 @@ if not st.session_state["autenticado"]:
       st.sidebar.error("Por favor completa los datos de acceso.")
   st.stop()
 
-# --- CABECERA SIDEBAR: USUARIO Y SALIR ---
-col_s1, col_s2 = st.sidebar.columns([2, 1])
-with col_s1:
+# --- CABECERA DE USUARIO Y CIERRE DE SESIÓN ---
+col_u1, col_u2 = st.sidebar.columns([2, 1])
+with col_u1:
   st.write(f"👤 **{st.session_state.get('usuario_actual')}**")
-with col_s2:
-  if st.button("🚪 Salir", key="btn_logout_top"):
+with col_u2:
+  if st.button("🚪 Salir", key="btn_logout"):
     st.session_state["autenticado"] = False
-    st.session_state["modulo_activo"] = "Ventas"
     st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
 
-# 1. BLOQUE VENTAS (Acceso directo)
-if st.sidebar.button(
-    "📊 Ventas", use_container_width=True, key="btn_menu_ventas"
-):
-  if st.session_state["modulo_activo"] != "Ventas":
-    st.session_state["modulo_activo"] = "Ventas"
-    st.rerun()
-
-# 2. BLOQUE TESORERÍA (Desplegable con submenú)
-with st.sidebar.expander("💰 Tesorería", expanded=False):
-  sub_tesoreria = st.radio(
-      "Seleccione una opción:",
-      ["Liquidaciones", "Extractos Bancarios"],
-      key="radio_sub_tesoreria",
-  )
-  estado_destino_tes = f"Tesorería - {sub_tesoreria}"
-  if st.session_state["modulo_activo"] != estado_destino_tes:
-    st.session_state["modulo_activo"] = estado_destino_tes
-    st.rerun()
-
-# 3. BLOQUE CONTABILIDAD (Desplegable con submenú de informes)
-with st.sidebar.expander("📈 Contabilidad", expanded=False):
-  sub_contabilidad = st.radio(
-      "Seleccione un informe:",
-      [
-          "Reporte Consolidado Ventas vs Acreditaciones",
-          "Reporte de Deducciones y Aranceles",
-          "Reporte de Pendientes de Acreditación",
-          "Reporte de Conciliación Bancaria",
-      ],
-      key="radio_sub_contabilidad",
-  )
-  estado_destino_cont = f"Contabilidad - {sub_contabilidad}"
-  if st.session_state["modulo_activo"] != estado_destino_cont:
-    st.session_state["modulo_activo"] = estado_destino_cont
-    st.rerun()
+# Menú desplegable lateral limpio y 100% estable (Evita bucles de pantalla en blanco)
+menu_opcion = st.sidebar.selectbox(
+    "Seleccione Sección / Módulo:",
+    [
+        "📊 Ventas",
+        "💰 Tesorería - Liquidaciones",
+        "💰 Tesorería - Extractos Bancarios",
+        "📈 Contabilidad - Reporte Consolidado Ventas vs Acreditaciones",
+        "📈 Contabilidad - Reporte de Deducciones y Aranceles",
+        "📈 Contabilidad - Reporte de Pendientes de Acreditación",
+        "📈 Contabilidad - Reporte de Conciliación Bancaria",
+    ],
+    key="select_menu_principal",
+)
 
 # --- RENDERIZADO DE CONTENIDO SEGÚN LA SELECCIÓN ---
-modulo_actual = st.session_state["modulo_activo"]
 
-# A. MÓDULO VENTAS
-if modulo_actual == "Ventas":
+# 1. MÓDULO DE VENTAS
+if menu_opcion == "📊 Ventas":
   st.markdown("## 📊 Módulo de Ventas")
   st.write(
       "Gestión de facturación, comprobantes comerciales y registro de bruto"
@@ -114,8 +90,8 @@ if modulo_actual == "Ventas":
     else:
       st.warning("Selecciona un archivo de ventas para registrar.")
 
-# B. TESORERÍA - LIQUIDACIONES
-elif modulo_actual == "Tesorería - Liquidaciones":
+# 2. TESORERÍA - LIQUIDACIONES
+elif menu_opcion == "💰 Tesorería - Liquidaciones":
   st.markdown("## 💰 Tesorería - Liquidaciones")
   st.write(
       "Bandeja unificada de carga de liquidaciones y comprobantes para"
@@ -143,8 +119,8 @@ elif modulo_actual == "Tesorería - Liquidaciones":
     else:
       st.warning("Sube al menos un archivo para procesar.")
 
-# C. TESORERÍA - EXTRACTOS BANCARIOS
-elif modulo_actual == "Tesorería - Extractos Bancarios":
+# 3. TESORERÍA - EXTRACTOS BANCARIOS
+elif menu_opcion == "💰 Tesorería - Extractos Bancarios":
   st.markdown("## 💰 Tesorería - Extractos Bancarios")
   st.write(
       "Carga de extractos bancarios para automatizar el cálculo y la"
@@ -172,9 +148,9 @@ elif modulo_actual == "Tesorería - Extractos Bancarios":
     else:
       st.warning("Sube un extracto bancario para realizar la conciliación.")
 
-# D. CONTABILIDAD - INFORMES CON RANGO DE FECHAS
-elif "Contabilidad" in modulo_actual:
-  nombre_informe = modulo_actual.split(" - ")[1]
+# 4. CONTABILIDAD - INFORMES CON FILTRO DE PERÍODO HISTÓRICO
+elif "📈 Contabilidad" in menu_opcion:
+  nombre_informe = menu_opcion.split(" - ")[1]
   st.markdown(f"## 📈 Contabilidad - {nombre_informe}")
   st.write(
       "Seleccione el rango de fechas para auditar y generar el informe oficial"
@@ -182,6 +158,7 @@ elif "Contabilidad" in modulo_actual:
   )
   st.markdown("---")
 
+  # --- FILTRO DE RANGO DE FECHAS PARA AUDITORÍA ---
   col_f1, col_f2 = st.columns(2)
   with col_f1:
     fecha_desde = st.date_input(
@@ -234,6 +211,7 @@ elif "Contabilidad" in modulo_actual:
         " 100%."
     )
 
+  # Botón de Descarga HTML Oficial con el rango de fechas dinámico
   st.markdown("<br>", unsafe_allow_html=True)
   html_reporte = f"""
     <html>
