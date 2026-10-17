@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS liquidacion_factura (
     factura_id INTEGER,
     PRIMARY KEY (liquidacion_id, factura_id)
 );
+CREATE TABLE IF NOT EXISTS liquidacion_impuestos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    liquidacion_id INTEGER,
+    impuesto TEXT,
+    monto REAL
+);
 CREATE TABLE IF NOT EXISTS actividad (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     momento TEXT, usuario TEXT, accion TEXT, detalle TEXT
@@ -306,7 +312,12 @@ if st.sidebar.button("🚪 Salir"):
 SUBMENUS = {
     "📊 Ventas": ["Carga de Registro de Ventas"],
     "💰 Tesorería": ["Liquidaciones", "Conciliación Bancaria"],
-    "📈 Contabilidad": ["Informes"],
+    "📈 Contabilidad": [
+        "Facturas vs neto final",
+        "Facturas impagas tras cruce bancario",
+        "Impuestos para DDJJ",
+        "Resumen general",
+    ],
 }
 
 if "bloque_abierto" not in st.session_state:
@@ -415,6 +426,14 @@ if vista == "Liquidaciones":
         ret = c3.number_input("Retenciones / percepciones", min_value=0.0, step=100.0, format="%.2f", key="f_ret")
         neto_acred = c1.number_input("Neto acreditado (si ya llegó)", min_value=0.0, step=100.0, format="%.2f", key="f_neto")
         f_acred = c2.date_input("Fecha de acreditación (si ya llegó)", value=None)
+        st.markdown("**Desglose de impuestos (para declaraciones juradas)**")
+        i1, i2, i3 = st.columns(3)
+        imp_iva21 = i1.number_input("IVA 21 %", min_value=0.0, step=100.0, format="%.2f", key="imp_iva21")
+        imp_iva105 = i2.number_input("IVA 10,5 %", min_value=0.0, step=100.0, format="%.2f", key="imp_iva105")
+        imp_iva27 = i3.number_input("IVA 27 %", min_value=0.0, step=100.0, format="%.2f", key="imp_iva27")
+        imp_sirtac = i1.number_input("SIRTAC / IIBB", min_value=0.0, step=100.0, format="%.2f", key="imp_sirtac")
+        imp_perc = i2.number_input("Percepciones (IVA, IIBB, otras)", min_value=0.0, step=100.0, format="%.2f", key="imp_perc")
+        imp_debcred = i3.number_input("Impuesto débitos y créditos", min_value=0.0, step=100.0, format="%.2f", key="imp_debcred")
         notas = st.text_area("Notas")
         vinc = st.multiselect(
             "Facturas relacionadas",
@@ -451,6 +470,16 @@ if vista == "Liquidaciones":
                     "INSERT OR IGNORE INTO liquidacion_factura (liquidacion_id, factura_id) VALUES (?,?)",
                     (liq_id, fid),
                 )
+            for nombre_imp, monto_imp in [
+                ("IVA 21%", imp_iva21), ("IVA 10,5%", imp_iva105), ("IVA 27%", imp_iva27),
+                ("SIRTAC / IIBB", imp_sirtac), ("Percepciones", imp_perc),
+                ("Impuesto débitos y créditos", imp_debcred),
+            ]:
+                if monto_imp:
+                    ejecutar(
+                        "INSERT INTO liquidacion_impuestos (liquidacion_id, impuesto, monto) VALUES (?,?,?)",
+                        (liq_id, nombre_imp, monto_imp),
+                    )
             registrar("Liquidación", f"#{liq_id} {plataforma} por {fmt(bruto)} ({estado})")
             st.success(f"Liquidación #{liq_id} guardada. Estado: {estado}.")
 
@@ -546,7 +575,103 @@ if vista == "Conciliación Bancaria":
     st.dataframe(control, hide_index=True)
 
 # ---------- 4. CONTABILIDAD: INFORMES ----------
-if vista == "Informes":
+# Informe 1: facturas vs neto final (después de impuestos, intereses y tasas)
+if vista == "Facturas vs neto final":
+    st.subheader("Facturas vs. lo que quedó después de impuestos, intereses y tasas")
+    d4, h4 = selector_rango("r1")
+    r1 = consultar(
+        """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total AS facturado,
+                  l.id AS liquidacion_id, l.plataforma, l.bruto, l.comision, l.costo_financiero,
+                  l.iva_comision, l.retenciones, l.neto_esperado, l.neto_acreditado, l.estado,
+                  (SELECT COALESCE(SUM(f2.total),0) FROM liquidacion_factura lf2
+                     JOIN facturas f2 ON f2.id = lf2.factura_id
+                     WHERE lf2.liquidacion_id = l.id) AS total_liq_facturas
+           FROM facturas f
+           JOIN liquidacion_factura lf ON lf.factura_id = f.id
+           JOIN liquidaciones l ON l.id = lf.liquidacion_id
+           WHERE f.fecha BETWEEN ? AND ?
+           ORDER BY f.fecha""",
+        (d4, h4),
+    )
+    if r1.empty:
+        st.info("No hay facturas vinculadas a liquidaciones en el rango.")
+    else:
+        r1["peso"] = r1.facturado / r1.total_liq_facturas
+        r1["deducciones"] = r1.peso * (r1.comision + r1.costo_financiero + r1.iva_comision + r1.retenciones)
+        r1["neto_final"] = r1.peso * r1.neto_acreditado.fillna(r1.neto_esperado)
+        r1["factura"] = r1.tipo + " " + r1.punto_venta.astype(str) + "-" + r1.numero.astype(str)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Facturado", fmt(r1.facturado.sum()))
+        m2.metric("Descuentos (impuestos, intereses, tasas)", fmt(r1.deducciones.sum()))
+        m3.metric("Neto final recibido", fmt(r1.neto_final.sum()))
+        tabla1 = r1[["fecha", "factura", "razon_social", "plataforma", "facturado", "deducciones", "neto_final", "estado"]]
+        st.dataframe(tabla1, hide_index=True)
+
+# Informe 2: facturas impagas después del cruce con el banco
+if vista == "Facturas impagas tras cruce bancario":
+    st.subheader("Facturas sin acreditación bancaria confirmada")
+    d5, h5 = selector_rango("r2")
+    r2 = consultar(
+        """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total
+           FROM facturas f
+           WHERE f.fecha BETWEEN ? AND ?
+             AND f.id NOT IN (
+                 SELECT lf.factura_id FROM liquidacion_factura lf
+                 JOIN liquidaciones l ON l.id = lf.liquidacion_id
+                 WHERE l.fecha_acreditacion IS NOT NULL)
+           ORDER BY f.fecha""",
+        (d5, h5),
+    )
+    st.metric("Total impago", fmt(r2.total.sum() if not r2.empty else 0))
+    if r2.empty:
+        st.success("No hay facturas impagas en el rango.")
+    else:
+        st.dataframe(r2, hide_index=True)
+
+# Informe 3: impuestos por liquidación, para declaraciones juradas
+if vista == "Impuestos para DDJJ":
+    st.subheader("Impuestos retenidos por liquidación (para DDJJ)")
+    d6, h6 = selector_rango("r3")
+    det = consultar(
+        """SELECT l.id AS nro_liquidacion, l.fecha_liquidacion, l.plataforma, l.nro_lote,
+                  COALESCE((SELECT GROUP_CONCAT(f.tipo || ' ' || f.punto_venta || '-' || f.numero, ', ')
+                            FROM liquidacion_factura lf JOIN facturas f ON f.id = lf.factura_id
+                            WHERE lf.liquidacion_id = l.id), '') AS facturas,
+                  li.impuesto, li.monto
+           FROM liquidacion_impuestos li
+           JOIN liquidaciones l ON l.id = li.liquidacion_id
+           WHERE l.fecha_liquidacion BETWEEN ? AND ?
+           ORDER BY l.fecha_liquidacion, l.id""",
+        (d6, h6),
+    )
+    if det.empty:
+        st.info("No hay impuestos desglosados en el rango. Cárgalos en el formulario de Liquidaciones.")
+    else:
+        st.metric("Total impuestos recaudados", fmt(det.monto.sum()))
+        st.markdown("#### Total por tipo de impuesto")
+        por_tipo = det.groupby("impuesto", as_index=False).monto.sum().sort_values("monto", ascending=False)
+        st.dataframe(por_tipo, hide_index=True)
+        st.markdown("#### Detalle por liquidación")
+        det["facturas"] = det.facturas.fillna("")
+        piv = det.pivot_table(
+            index=["nro_liquidacion", "fecha_liquidacion", "plataforma", "nro_lote", "facturas"],
+            columns="impuesto", values="monto", aggfunc="sum", fill_value=0,
+        ).reset_index()
+        st.dataframe(piv, hide_index=True)
+        buf3 = BytesIO()
+        with pd.ExcelWriter(buf3, engine="openpyxl") as w:
+            por_tipo.to_excel(w, sheet_name="Total por impuesto", index=False)
+            piv.to_excel(w, sheet_name="Detalle por liquidacion", index=False)
+        st.download_button(
+            "📥 Descargar impuestos para DDJJ",
+            data=buf3.getvalue(),
+            file_name=f"impuestos_ddjj_{d6}_{h6}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+        )
+
+# Informe general (resumen anterior)
+if vista == "Resumen general":
     st.subheader("Informes para la toma de decisiones")
     d3, h3 = selector_rango("inf")
     plats_db = consultar("SELECT DISTINCT plataforma FROM liquidaciones ORDER BY plataforma")
