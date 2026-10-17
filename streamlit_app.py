@@ -15,6 +15,9 @@ st.set_page_config(
 if "autenticado" not in st.session_state:
   st.session_state["autenticado"] = False
 
+if "modulo_activo" not in st.session_state:
+  st.session_state["modulo_activo"] = "Ventas"
+
 # --- BARRA LATERAL (SIDEBAR) - AUTENTICACIÓN Y NAVEGACIÓN ---
 st.sidebar.title("Mueblería Castillo de Oro")
 
@@ -40,20 +43,19 @@ with col_s1:
 with col_s2:
   if st.button("🚪 Salir", key="btn_logout_top"):
     st.session_state["autenticado"] = False
+    st.session_state["modulo_activo"] = "Ventas"
     st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Módulos Principales")
 
-if "modulo_activo" not in st.session_state:
-  st.session_state["modulo_activo"] = "Ventas"
-
 # 1. BLOQUE VENTAS (Acceso directo)
 if st.sidebar.button(
     "📊 Ventas", use_container_width=True, key="btn_menu_ventas"
 ):
-  st.session_state["modulo_activo"] = "Ventas"
-  st.rerun()
+  if st.session_state["modulo_activo"] != "Ventas":
+    st.session_state["modulo_activo"] = "Ventas"
+    st.rerun()
 
 # 2. BLOQUE TESORERÍA (Desplegable con submenú)
 with st.sidebar.expander("💰 Tesorería", expanded=False):
@@ -62,9 +64,9 @@ with st.sidebar.expander("💰 Tesorería", expanded=False):
       ["Liquidaciones", "Extractos Bancarios"],
       key="radio_sub_tesoreria",
   )
-  estado_destino = f"Tesorería - {sub_tesoreria}"
-  if st.session_state["modulo_activo"] != estado_destino:
-    st.session_state["modulo_activo"] = estado_destino
+  estado_destino_tes = f"Tesorería - {sub_tesoreria}"
+  if st.session_state["modulo_activo"] != estado_destino_tes:
+    st.session_state["modulo_activo"] = estado_destino_tes
     st.rerun()
 
 # 3. BLOQUE CONTABILIDAD (Desplegable con submenú de informes)
@@ -162,7 +164,7 @@ elif modulo_actual == "Tesorería - Extractos Bancarios":
     for ext in extractos_files:
       st.text(f"🏦 Extracto detectado: {ext.name}")
 
-  if st.button("Conciliarกับ Extractos Bancarios", type="primary"):
+  if st.button("Conciliar con Extractos Bancarios", type="primary"):
     if extractos_files:
       st.success(
           "¡Extractos conciliados correctamente con el módulo de contabilidad!"
