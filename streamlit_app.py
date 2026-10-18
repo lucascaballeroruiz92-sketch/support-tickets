@@ -1,4 +1,3 @@
-```python name=streamlit_app.py
 import re
 import sqlite3
 import traceback
@@ -978,6 +977,3 @@ elif vista == "Extractos Bancarios":
     vista_extractos(hoja)
 elif bloque == "📈 Contabilidad":
     vista_contabilidad(vista)
-```
-
-Después de copiarlo, confirma los cambios en GitHub y reinicia la app en Streamlit Cloud. Si aparece otro error, pega el texto en rojo completo.
