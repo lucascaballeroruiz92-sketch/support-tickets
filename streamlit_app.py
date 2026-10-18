@@ -1,5 +1,3 @@
-Ese error vino de mi respuesta anterior: el código se cortó en la función `liq_planilla`. Aquí está el archivo completo y corregido. Reemplaza todo el contenido de `streamlit_app.py` en GitHub con esto.
-
 ```python name=streamlit_app.py
 import re
 import sqlite3
