@@ -1,6 +1,7 @@
 import re
 import sqlite3
 import traceback
+import html as html_lib
 import unicodedata
 from contextlib import closing
 from datetime import date, datetime
@@ -715,7 +716,7 @@ SUBMENUS = {
     },
     "📈 Contabilidad": [
         "Facturas vs neto final",
-        "Facturas impagas tras cruce bancario",
+        "Facturas impagas",
         "Impuestos para DDJJ",
         "Resumen general",
     ],
@@ -1146,18 +1147,32 @@ def vista_contabilidad(nombre):
             m2.metric("Descuentos", fmt(r1.descuentos.sum()))
             m3.metric("Neto final", fmt(r1.neto_final.sum()))
             st.dataframe(r1[["fecha", "factura", "razon_social", "plataforma", "facturado", "descuentos", "neto_final", "estado"]], hide_index=True)
-    elif nombre == "Facturas impagas tras cruce bancario":
+    elif nombre == "Facturas impagas":
         d5, h5 = selector_rango("r2")
         r2 = consultar(
-            """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total FROM facturas f
-               WHERE f.fecha BETWEEN ? AND ? AND f.id NOT IN (
-                 SELECT lf.factura_id FROM liquidacion_factura lf
-                 JOIN liquidaciones l ON l.id = lf.liquidacion_id WHERE l.estado = 'Conciliada')
-               ORDER BY f.fecha""",
+            """SELECT f.id, f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total,
+                      (SELECT COUNT(*) FROM liquidacion_factura lf WHERE lf.factura_id = f.id) AS vinc
+               FROM facturas f WHERE f.fecha BETWEEN ? AND ? ORDER BY f.fecha""",
             (d5, h5),
         )
-        st.metric("Total impago", fmt(r2.total.sum() if not r2.empty else 0))
-        st.dataframe(r2, hide_index=True)
+        if r2.empty:
+            st.info("No hay facturas en el rango.")
+        else:
+            impagas = r2[r2.vinc == 0]
+            st.metric("Total impago", fmt(impagas.total.sum()))
+            st.caption("Las facturas tachadas en rojo ya están vinculadas a una liquidación.")
+            filas_html = []
+            for r in r2.itertuples():
+                vinculada = int(r.vinc) > 0
+                estilo = "text-decoration: line-through; color: red;" if vinculada else ""
+                celdas = [str(r.fecha), f"{r.tipo} {r.punto_venta}-{r.numero}", str(r.razon_social), fmt(r.total), "Sí" if vinculada else "No"]
+                tds = "".join(f"<td style='padding:4px 8px;border-bottom:1px solid #ddd;{estilo}'>{html_lib.escape(c)}</td>" for c in celdas)
+                filas_html.append(f"<tr>{tds}</tr>")
+            encabezado = "".join(f"<th style='padding:4px 8px;text-align:left;border-bottom:2px solid #999'>{h}</th>" for h in ["Fecha", "Comprobante", "Razón social", "Total", "Vinculada"])
+            st.markdown(
+                f"<table style='width:100%;border-collapse:collapse'><thead><tr>{encabezado}</tr></thead><tbody>{''.join(filas_html)}</tbody></table>",
+                unsafe_allow_html=True,
+            )
     elif nombre == "Impuestos para DDJJ":
         d6, h6 = selector_rango("r3")
         det = consultar(
