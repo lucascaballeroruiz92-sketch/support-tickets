@@ -401,6 +401,30 @@ def eliminar_liquidacion(liq_id, usuario):
     return True, f"Liquidación {detalle} eliminada."
 
 
+def borrar_todos_los_datos():
+    """Vacía todas las tablas de datos: liquidaciones, facturas AFIP, extractos y actividad."""
+    tablas = ("liquidacion_impuestos", "liquidacion_filas", "liquidacion_comprobantes",
+              "liquidacion_pdf", "liquidacion_factura", "liquidaciones",
+              "extracto_movimientos", "extractos", "facturas", "actividad")
+    with closing(sqlite3.connect(DB_PATH, timeout=30)) as con:
+        for tabla in tablas:
+            con.execute(f"DELETE FROM {tabla}")
+        con.execute("DELETE FROM sqlite_sequence")
+        con.commit()
+
+
+def borrar_todas_liquidaciones(usuario):
+    """Borra todas las liquidaciones y sus datos asociados. No toca facturas AFIP ni extractos."""
+    with closing(sqlite3.connect(DB_PATH, timeout=30)) as con:
+        n = con.execute("SELECT COUNT(*) FROM liquidaciones").fetchone()[0]
+        for tabla in ("liquidacion_impuestos", "liquidacion_filas", "liquidacion_comprobantes",
+                      "liquidacion_pdf", "liquidacion_factura", "liquidaciones"):
+            con.execute(f"DELETE FROM {tabla}")
+        con.commit()
+    registrar("Borrado total de liquidaciones", f"{n} liquidaciones eliminadas por {usuario}")
+    return n
+
+
 # ======================= VINCULACIÓN CON AFIP =======================
 def cruzar_por_dia(filas):
     """Por cada fila del PDF: facturas con fecha ±1 día cuya suma coincida con el monto."""
@@ -720,6 +744,14 @@ for nombre, opciones in SUBMENUS.items():
     elif abierto:
         st.sidebar.radio("Submenú:", opciones, key=f"sub_{nombre}", label_visibility="collapsed")
 
+with st.sidebar.expander("⚠️ Reiniciar datos de prueba"):
+    st.caption("Borra liquidaciones, facturas AFIP, extractos y actividad. No se puede deshacer.")
+    conf_todo = st.checkbox("Entiendo que se borrará todo", key="chk_reset_todo")
+    if st.button("Borrar todos los datos", disabled=not conf_todo, key="btn_reset_todo"):
+        borrar_todos_los_datos()
+        st.session_state.pop("resultado_conc", None)
+        st.rerun()
+
 st.title("Castillo de Oro")
 
 bloque = st.session_state["bloque_abierto"]
@@ -798,16 +830,77 @@ def liq_carga():
     )
     st.dataframe(liqs, hide_index=True)
 
+    st.markdown("#### Borrar todas las liquidaciones")
+    st.caption("Borra todas las liquidaciones cargadas, con sus impuestos, filas, comprobantes y vinculaciones. No borra facturas AFIP ni extractos.")
+    confirmar = st.checkbox("Entiendo que esta acción no se puede deshacer", key="chk_borrar_todo")
+    if st.button("🗑️ Borrar todas las liquidaciones", type="primary", disabled=not confirmar, key="btn_borrar_todo"):
+        n = borrar_todas_liquidaciones(usuario)
+        st.success(f"Se borraron {n} liquidaciones.")
+        st.rerun()
+
+
+def guardar_vinculacion_manual(liq_id, factura_ids, usuario):
+    """Reemplaza las facturas vinculadas a una liquidación por la selección manual."""
+    liq_id = int(liq_id)
+    with closing(sqlite3.connect(DB_PATH, timeout=30)) as con:
+        con.execute("DELETE FROM liquidacion_factura WHERE liquidacion_id=?", (liq_id,))
+        con.executemany(
+            "INSERT INTO liquidacion_factura (liquidacion_id, factura_id) VALUES (?,?)",
+            [(liq_id, int(f)) for f in factura_ids],
+        )
+        con.commit()
+    registrar("Vinculación manual", f"Liquidación #{liq_id}: {len(factura_ids)} factura(s)")
+
 
 def liq_vinculacion():
     st.subheader("Vinculación de comprobantes")
-    st.caption("Cruza las liquidaciones cargadas con las facturas de AFIP ya importadas.")
-    if st.button("Vincular factura", type="primary"):
-        res = vincular_pendientes()
-        if res:
-            st.dataframe(pd.DataFrame(res), hide_index=True)
-        else:
-            st.info("No hay liquidaciones pendientes de vincular.")
+    st.markdown("#### Vincular manualmente")
+    st.caption("Elegí una liquidación y marcá las facturas AFIP que le corresponden. Comparalas con el bruto.")
+    liqs = consultar(
+        "SELECT id, plataforma, nro_lote, fecha_liquidacion, bruto FROM liquidaciones ORDER BY fecha_liquidacion DESC, id DESC"
+    )
+    if liqs.empty:
+        st.info("No hay liquidaciones cargadas.")
+    else:
+        opc = {
+            f"#{int(r.id)} - {r.plataforma} - {r.nro_lote or 's/lote'} - {r.fecha_liquidacion}": r
+            for r in liqs.itertuples()
+        }
+        eleg = st.selectbox("Liquidación", list(opc), key="vinc_liq_sel")
+        L = opc[eleg]
+        liq_id = int(L.id)
+        bruto = float(L.bruto or 0)
+        otras = consultar("SELECT factura_id FROM liquidacion_factura WHERE liquidacion_id != ?", (liq_id,))
+        facts = consultar(
+            """SELECT id, fecha, tipo, punto_venta, numero, razon_social, total FROM facturas
+               ORDER BY fecha DESC"""
+        )
+        facts = facts[~facts.id.isin(otras.factura_id.tolist())]
+        actuales = consultar("SELECT factura_id FROM liquidacion_factura WHERE liquidacion_id=?", (liq_id,)).factura_id.tolist()
+        etiquetas = {
+            int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | {fmt(r.total)}"
+            for r in facts.itertuples()
+        }
+        c1, c2 = st.columns(2)
+        c1.metric("Bruto de la liquidación", fmt(bruto))
+        sel = st.multiselect(
+            "Facturas AFIP",
+            options=list(etiquetas),
+            default=[int(x) for x in actuales if int(x) in etiquetas],
+            format_func=lambda i: etiquetas[i],
+            key=f"vinc_fac_{liq_id}",
+        )
+        total_sel = float(facts[facts.id.isin(sel)].total.sum()) if sel else 0.0
+        dif = round(bruto - total_sel, 2)
+        c2.metric("Total de facturas seleccionadas", fmt(total_sel))
+        if sel and abs(dif) <= TOLERANCIA:
+            st.success("El total de facturas coincide con el bruto de la liquidación.")
+        elif sel:
+            st.warning(f"Diferencia bruto − facturas: {fmt(dif)}")
+        if st.button("Guardar vinculación", type="primary", key=f"btn_vinc_{liq_id}"):
+            guardar_vinculacion_manual(liq_id, sel, usuario)
+            st.success(f"Liquidación #{liq_id} vinculada con {len(sel)} factura(s).")
+            st.rerun()
     st.markdown("#### Comprobantes vinculados")
     vinc = consultar(
         """SELECT l.id AS liquidacion, l.plataforma, l.nro_lote, f.fecha, f.tipo,
