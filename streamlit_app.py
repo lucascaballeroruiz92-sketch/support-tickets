@@ -82,6 +82,9 @@ def init_db():
     with closing(sqlite3.connect(DB_PATH, timeout=30)) as con:
         con.execute("PRAGMA journal_mode=WAL")
         con.executescript(SCHEMA)
+        cols = [r[1] for r in con.execute("PRAGMA table_info(liquidacion_factura)")]
+        if "monto" not in cols:
+            con.execute("ALTER TABLE liquidacion_factura ADD COLUMN monto REAL")
         con.commit()
 
 
@@ -629,7 +632,7 @@ def conciliar(usuario):
     liqs = consultar(
         """SELECT l.id, l.plataforma, l.nro_lote, l.fecha_liquidacion, l.bruto,
                l.comision, l.costo_financiero, l.iva_comision, l.retenciones,
-               (SELECT COALESCE(SUM(f.total),0) FROM liquidacion_factura lf
+               (SELECT COALESCE(SUM(COALESCE(lf.monto, f.total)),0) FROM liquidacion_factura lf
                   JOIN facturas f ON f.id = lf.factura_id WHERE lf.liquidacion_id = l.id) AS facturado,
                (SELECT COUNT(*) FROM liquidacion_factura lf WHERE lf.liquidacion_id = l.id) AS n_fac,
                (SELECT p.neto_pdf FROM liquidacion_pdf p WHERE p.liquidacion_id = l.id) AS neto_pdf
@@ -769,6 +772,21 @@ else:
     vista = st.session_state.get(f"sub_{bloque}", SUBMENUS[bloque][0])
 
 
+def guardar_venta_manual(fecha, cliente, total, usuario):
+    """Carga una venta sin factura AFIP. Se guarda en facturas con tipo MANUAL para poder vincularla igual que una factura."""
+    with closing(sqlite3.connect(DB_PATH, timeout=30)) as con:
+        n = con.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM facturas").fetchone()[0]
+        con.execute(
+            """INSERT INTO facturas (fecha, tipo, punto_venta, numero, cuit_emisor, razon_social,
+                                    neto, iva, total, cae, cargado_por, fecha_carga)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (fecha.isoformat(), "MANUAL", "0", f"{n:08d}", "", cliente or "Venta sin factura",
+             round(total, 2), 0.0, round(total, 2), "", usuario, ahora()),
+        )
+        con.commit()
+    registrar("Venta manual", f"{fmt(total)} {cliente or ''} ({fecha.isoformat()})")
+
+
 # ======================= 1. VENTAS =======================
 def vista_ventas():
     st.subheader("Importar facturas emitidas desde AFIP")
@@ -782,6 +800,20 @@ def vista_ventas():
             st.success(f"Se incorporaron {nuevas} facturas nuevas de {total} filas.")
         except Exception as e:
             st.error(f"No se pudo importar: {e}")
+
+    st.markdown("#### Cargar venta sin factura")
+    st.caption("Para ventas que se cobran con tarjeta pero no tienen comprobante AFIP. Quedan marcadas como MANUAL y se pueden vincular a una liquidación.")
+    with st.form("form_venta_manual", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        f_v = c1.date_input("Fecha de la venta", value=date.today(), key="vm_f")
+        cli = c2.text_input("Cliente / detalle (opcional)", key="vm_c")
+        monto = c3.number_input("Monto total", min_value=0.0, step=100.0, format="%.2f", key="vm_m")
+        if st.form_submit_button("Guardar venta", type="primary"):
+            if monto <= 0:
+                st.error("El monto debe ser mayor a cero.")
+            else:
+                guardar_venta_manual(f_v, cli.strip(), float(monto), usuario)
+                st.success(f"Venta manual cargada por {fmt(monto)}.")
 
     st.markdown("#### Facturas cargadas")
     d, h = selector_rango("fact")
@@ -839,17 +871,17 @@ def liq_carga():
         st.rerun()
 
 
-def guardar_vinculacion_manual(liq_id, factura_ids, usuario):
-    """Reemplaza las facturas vinculadas a una liquidación por la selección manual."""
+def guardar_vinculacion_manual(liq_id, imputaciones, usuario):
+    """Reemplaza las vinculaciones de una liquidación. imputaciones: {factura_id: monto imputado}."""
     liq_id = int(liq_id)
     with closing(sqlite3.connect(DB_PATH, timeout=30)) as con:
         con.execute("DELETE FROM liquidacion_factura WHERE liquidacion_id=?", (liq_id,))
         con.executemany(
-            "INSERT INTO liquidacion_factura (liquidacion_id, factura_id) VALUES (?,?)",
-            [(liq_id, int(f)) for f in factura_ids],
+            "INSERT INTO liquidacion_factura (liquidacion_id, factura_id, monto) VALUES (?,?,?)",
+            [(liq_id, int(f), float(m)) for f, m in imputaciones.items()],
         )
         con.commit()
-    registrar("Vinculación manual", f"Liquidación #{liq_id}: {len(factura_ids)} factura(s)")
+    registrar("Vinculación manual", f"Liquidación #{liq_id}: {len(imputaciones)} factura(s)")
 
 
 def liq_vinculacion():
@@ -870,15 +902,27 @@ def liq_vinculacion():
         L = opc[eleg]
         liq_id = int(L.id)
         bruto = float(L.bruto or 0)
-        otras = consultar("SELECT factura_id FROM liquidacion_factura WHERE liquidacion_id != ?", (liq_id,))
+        # Lo que ya cubren otras liquidaciones, por factura (una venta puede pagarse en parte con tarjeta)
+        otras = consultar(
+            """SELECT lf.factura_id, COALESCE(lf.monto, f.total) AS imp FROM liquidacion_factura lf
+               JOIN facturas f ON f.id = lf.factura_id WHERE lf.liquidacion_id != ?""",
+            (liq_id,),
+        )
+        usado_otras = {int(r.factura_id): float(r.imp) for r in otras.itertuples()}
         facts = consultar(
             """SELECT id, fecha, tipo, punto_venta, numero, razon_social, total FROM facturas
                ORDER BY fecha DESC"""
         )
-        facts = facts[~facts.id.isin(otras.factura_id.tolist())]
-        actuales = consultar("SELECT factura_id FROM liquidacion_factura WHERE liquidacion_id=?", (liq_id,)).factura_id.tolist()
+        facts["saldo"] = [round(float(t) - usado_otras.get(int(i), 0.0), 2) for i, t in zip(facts.id, facts.total)]
+        facts = facts[facts.saldo > TOLERANCIA]
+        actuales = consultar(
+            """SELECT lf.factura_id, COALESCE(lf.monto, f.total) AS monto FROM liquidacion_factura lf
+               JOIN facturas f ON f.id = lf.factura_id WHERE lf.liquidacion_id=?""",
+            (liq_id,),
+        )
+        act = {int(r.factura_id): float(r.monto) for r in actuales.itertuples()}
         etiquetas = {
-            int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | {fmt(r.total)}"
+            int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | Total {fmt(r.total)} | Saldo {fmt(r.saldo)}"
             for r in facts.itertuples()
         }
         c1, c2 = st.columns(2)
@@ -886,21 +930,55 @@ def liq_vinculacion():
         sel = st.multiselect(
             "Facturas AFIP",
             options=list(etiquetas),
-            default=[int(x) for x in actuales if int(x) in etiquetas],
+            default=[fid for fid in act if fid in etiquetas],
             format_func=lambda i: etiquetas[i],
             key=f"vinc_fac_{liq_id}",
         )
-        total_sel = float(facts[facts.id.isin(sel)].total.sum()) if sel else 0.0
-        dif = round(bruto - total_sel, 2)
-        c2.metric("Total de facturas seleccionadas", fmt(total_sel))
+        st.caption("Indicá cuánto de cada factura se cobró con esta liquidación. El resto puede ser efectivo o transferencia.")
+        imps = {}
+        for fid in sel:
+            fila = facts[facts.id == fid].iloc[0]
+            saldo = float(fila.saldo)
+            defecto = act.get(fid, min(saldo, float(fila.total)))
+            imps[fid] = st.number_input(
+                f"A imputar de la factura {int(fila.punto_venta) if str(fila.punto_venta).isdigit() else fila.punto_venta}-{fila.numero} (saldo disponible {fmt(saldo)})",
+                min_value=0.0, max_value=saldo, value=float(min(defecto, saldo)), step=100.0,
+                format="%.2f", key=f"imp_{liq_id}_{fid}",
+            )
+        total_imp = round(sum(imps.values()), 2)
+        dif = round(bruto - total_imp, 2)
+        c2.metric("Total imputado a esta liquidación", fmt(total_imp))
         if sel and abs(dif) <= TOLERANCIA:
-            st.success("El total de facturas coincide con el bruto de la liquidación.")
+            st.success("El total imputado coincide con el bruto de la liquidación.")
         elif sel:
-            st.warning(f"Diferencia bruto − facturas: {fmt(dif)}")
+            st.warning(f"Diferencia bruto − imputado: {fmt(dif)}. Si la venta se cobró en parte con efectivo o transferencia, es normal.")
+        if sel:
+            resumen = []
+            for fid in sel:
+                fila = facts[facts.id == fid].iloc[0]
+                ya = usado_otras.get(fid, 0.0)
+                tot = float(fila.total)
+                resumen.append({
+                    "Comprobante": f"{fila.tipo} {fila.punto_venta}-{fila.numero}",
+                    "Cliente": fila.razon_social,
+                    "Total factura": tot,
+                    "Cubierto por otras liquidaciones": ya,
+                    "Imputado a esta liquidación": imps[fid],
+                    "Cobrado por otro medio": round(tot - ya - imps[fid], 2),
+                })
+            st.dataframe(pd.DataFrame(resumen), hide_index=True, use_container_width=True)
         if st.button("Guardar vinculación", type="primary", key=f"btn_vinc_{liq_id}"):
-            guardar_vinculacion_manual(liq_id, sel, usuario)
-            st.success(f"Liquidación #{liq_id} vinculada con {len(sel)} factura(s).")
-            st.rerun()
+            errores = []
+            for fid in sel:
+                saldo = float(facts[facts.id == fid].iloc[0].saldo)
+                if imps[fid] <= 0 or imps[fid] > saldo + TOLERANCIA:
+                    errores.append(etiquetas[fid])
+            if errores:
+                st.error("Revisá los montos a imputar de: " + "; ".join(errores))
+            else:
+                guardar_vinculacion_manual(liq_id, {f: round(imps[f], 2) for f in sel}, usuario)
+                st.success(f"Liquidación #{liq_id} vinculada con {len(sel)} factura(s).")
+                st.rerun()
     st.markdown("#### Comprobantes vinculados")
     vinc = consultar(
         """SELECT l.id AS liquidacion, l.plataforma, l.nro_lote, f.fecha, f.tipo,
@@ -944,8 +1022,8 @@ def liq_planilla():
     df = consultar(
         """SELECT l.id AS liq, l.plataforma, l.nro_lote, l.fecha_liquidacion, l.fecha_acreditacion,
                   l.neto_acreditado, l.comision, l.costo_financiero, l.iva_comision, l.retenciones,
-                  f.fecha AS fecha_fac, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total,
-                  (SELECT SUM(f2.total) FROM liquidacion_factura lf2 JOIN facturas f2 ON f2.id = lf2.factura_id
+                  f.fecha AS fecha_fac, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total, COALESCE(lf.monto, f.total) AS imp,
+                  (SELECT SUM(COALESCE(lf2.monto, f2.total)) FROM liquidacion_factura lf2 JOIN facturas f2 ON f2.id = lf2.factura_id
                     WHERE lf2.liquidacion_id = l.id) AS tot_liq
            FROM liquidacion_factura lf
            JOIN liquidaciones l ON l.id = lf.liquidacion_id
@@ -957,12 +1035,13 @@ def liq_planilla():
         return
     imp = consultar("SELECT liquidacion_id, impuesto, SUM(monto) AS monto FROM liquidacion_impuestos GROUP BY liquidacion_id, impuesto")
     imp_p = imp.pivot(index="liquidacion_id", columns="impuesto", values="monto").fillna(0) if not imp.empty else pd.DataFrame()
-    peso = df.total / df.tot_liq
+    peso = df.imp / df.tot_liq
     out = pd.DataFrame({
         "FECHA FAC.": pd.to_datetime(df.fecha_fac).dt.strftime("%d/%m/%Y"),
         "COMPROBANTE": df.tipo + " " + df.punto_venta.astype(str) + "-" + df.numero.astype(str),
         "CLIENTE": df.razon_social,
         "MONTO FACTURA": df.total,
+        "MONTO IMPUTADO A LIQ.": df.imp,
         "LIQ. N°": df.liq,
         "PLATAFORMA": df.plataforma,
         "ARANCEL": df.comision * peso,
@@ -974,7 +1053,7 @@ def liq_planilla():
                           ("Impuesto débitos y créditos", "DÉB. Y CRÉD.")]:
         out[etiqueta] = (df.liq.map(imp_p[col]) if (not imp_p.empty and col in imp_p) else 0) * peso
     out["TOTAL DEDUCCIONES"] = (df.comision + df.costo_financiero + df.iva_comision + df.retenciones) * peso
-    out["NETO PARA ESTA VENTA"] = df.total - out["TOTAL DEDUCCIONES"]
+    out["NETO PARA ESTA VENTA"] = df.imp - out["TOTAL DEDUCCIONES"]
     out["FECHA ACRED."] = df.fecha_acreditacion
     out["ACREDITADO BANCO"] = df.neto_acreditado * peso
     st.dataframe(out.round(2), hide_index=True, use_container_width=True)
@@ -1044,10 +1123,10 @@ def vista_contabilidad(nombre):
     if nombre == "Facturas vs neto final":
         d4, h4 = selector_rango("r1")
         r1 = consultar(
-            """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total AS facturado,
+            """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, COALESCE(lf.monto, f.total) AS facturado,
                       l.plataforma, l.comision, l.costo_financiero, l.iva_comision, l.retenciones,
                       l.neto_acreditado, l.neto_esperado, l.estado,
-                      (SELECT COALESCE(SUM(f2.total),0) FROM liquidacion_factura lf2
+                      (SELECT COALESCE(SUM(COALESCE(lf2.monto, f2.total)),0) FROM liquidacion_factura lf2
                          JOIN facturas f2 ON f2.id = lf2.factura_id WHERE lf2.liquidacion_id = l.id) AS tot
                FROM facturas f
                JOIN liquidacion_factura lf ON lf.factura_id = f.id
