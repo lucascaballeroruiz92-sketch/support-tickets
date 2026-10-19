@@ -885,7 +885,7 @@ def guardar_vinculacion_manual(liq_id, imputaciones, usuario):
     registrar("Vinculación manual", f"Liquidación #{liq_id}: {len(imputaciones)} factura(s)")
 
 
-def liq_vinculacion():
+def _liq_vinculacion_anterior():  # reemplazada por liq_vinculacion(); se puede borrar
     st.subheader("Vinculación de comprobantes")
     st.markdown("#### Vincular manualmente")
     st.caption("Elegí una liquidación y marcá las facturas AFIP que le corresponden. Comparalas con el bruto.")
@@ -980,6 +980,149 @@ def liq_vinculacion():
                 guardar_vinculacion_manual(liq_id, {f: round(imps[f], 2) for f in sel}, usuario)
                 st.success(f"Liquidación #{liq_id} vinculada con {len(sel)} factura(s).")
                 st.rerun()
+    st.markdown("#### Comprobantes vinculados")
+    vinc = consultar(
+        """SELECT l.id AS liquidacion, l.plataforma, l.nro_lote, f.fecha, f.tipo,
+                  f.punto_venta, f.numero, f.razon_social, f.total
+           FROM liquidacion_factura lf
+           JOIN liquidaciones l ON l.id = lf.liquidacion_id
+           JOIN facturas f ON f.id = lf.factura_id
+           ORDER BY l.id, f.fecha"""
+    )
+    st.dataframe(vinc, hide_index=True)
+
+    st.markdown("#### Eliminar liquidación")
+    st.caption("Solo se pueden eliminar liquidaciones que no tengan comprobantes vinculados.")
+    todas = consultar("SELECT id, plataforma, nro_lote, fecha_liquidacion FROM liquidaciones ORDER BY fecha_liquidacion DESC, id DESC")
+    if todas.empty:
+        st.info("No hay liquidaciones cargadas.")
+    else:
+        opciones = {
+            f"#{int(r.id)} - {r.plataforma} - {r.nro_lote or 's/lote'} - {r.fecha_liquidacion}": int(r.id)
+            for r in todas.itertuples()
+        }
+        elegida = st.selectbox("Liquidación", list(opciones), key="del_liq_sel")
+        liq_sel = opciones[elegida]
+        n_vinc = cantidad_vinculadas(liq_sel)
+        if n_vinc > 0:
+            st.warning(f"No se puede eliminar: tiene {n_vinc} comprobante(s) vinculado(s).")
+        else:
+            st.info("Esta liquidación no tiene comprobantes vinculados y puede eliminarse.")
+            if st.button("🗑️ Eliminar liquidación", type="primary", key="btn_del_liq"):
+                ok, msg = eliminar_liquidacion(liq_sel, usuario)
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+
+def vinculacion_manual(L, ver):
+    liq_id = int(L.id)
+    bruto = float(L.bruto or 0)
+    # Lo que ya cubren otras liquidaciones, por factura (una venta puede pagarse en parte con tarjeta)
+    otras = consultar(
+        """SELECT lf.factura_id, COALESCE(lf.monto, f.total) AS imp FROM liquidacion_factura lf
+           JOIN facturas f ON f.id = lf.factura_id WHERE lf.liquidacion_id != ?""",
+        (liq_id,),
+    )
+    usado_otras = {int(r.factura_id): float(r.imp) for r in otras.itertuples()}
+    facts = consultar(
+        """SELECT id, fecha, tipo, punto_venta, numero, razon_social, total FROM facturas
+           ORDER BY fecha DESC"""
+    )
+    facts["saldo"] = [round(float(t) - usado_otras.get(int(i), 0.0), 2) for i, t in zip(facts.id, facts.total)]
+    facts = facts[facts.saldo > TOLERANCIA]
+    actuales = consultar(
+        """SELECT lf.factura_id, COALESCE(lf.monto, f.total) AS monto FROM liquidacion_factura lf
+           JOIN facturas f ON f.id = lf.factura_id WHERE lf.liquidacion_id=?""",
+        (liq_id,),
+    )
+    act = {int(r.factura_id): float(r.monto) for r in actuales.itertuples()}
+    etiquetas = {
+        int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | Total {fmt(r.total)} | Saldo {fmt(r.saldo)}"
+        for r in facts.itertuples()
+    }
+    c1, c2 = st.columns(2)
+    c1.metric("Bruto de la liquidación", fmt(bruto))
+    sel = st.multiselect(
+        "Facturas AFIP",
+        options=list(etiquetas),
+        default=[fid for fid in act if fid in etiquetas],
+        format_func=lambda i: etiquetas[i],
+        key=f"vinc_fac_{liq_id}_{ver}",
+    )
+    st.caption("Indicá cuánto de cada factura se cobró con esta liquidación. El resto puede ser efectivo o transferencia.")
+    imps = {}
+    for fid in sel:
+        fila = facts[facts.id == fid].iloc[0]
+        saldo = float(fila.saldo)
+        defecto = act.get(fid, min(saldo, float(fila.total)))
+        imps[fid] = st.number_input(
+            f"A imputar de la factura {int(fila.punto_venta) if str(fila.punto_venta).isdigit() else fila.punto_venta}-{fila.numero} (saldo disponible {fmt(saldo)})",
+            min_value=0.0, max_value=saldo, value=float(min(defecto, saldo)), step=100.0,
+            format="%.2f", key=f"imp_{liq_id}_{fid}_{ver}",
+        )
+    total_imp = round(sum(imps.values()), 2)
+    dif = round(bruto - total_imp, 2)
+    c2.metric("Total imputado a esta liquidación", fmt(total_imp))
+    if sel and abs(dif) <= TOLERANCIA:
+        st.success("El total imputado coincide con el bruto de la liquidación.")
+    elif sel:
+        st.warning(f"Diferencia bruto − imputado: {fmt(dif)}. Si la venta se cobró en parte con efectivo o transferencia, es normal.")
+    if sel:
+        resumen = []
+        for fid in sel:
+            fila = facts[facts.id == fid].iloc[0]
+            ya = usado_otras.get(fid, 0.0)
+            tot = float(fila.total)
+            resumen.append({
+                "Comprobante": f"{fila.tipo} {fila.punto_venta}-{fila.numero}",
+                "Cliente": fila.razon_social,
+                "Total factura": tot,
+                "Cubierto por otras liquidaciones": ya,
+                "Imputado a esta liquidación": imps[fid],
+                "Cobrado por otro medio": round(tot - ya - imps[fid], 2),
+            })
+        st.dataframe(pd.DataFrame(resumen), hide_index=True, use_container_width=True)
+    if st.button("Guardar vinculación", type="primary", key=f"btn_vinc_{liq_id}_{ver}"):
+        errores = []
+        for fid in sel:
+            saldo = float(facts[facts.id == fid].iloc[0].saldo)
+            if imps[fid] <= 0 or imps[fid] > saldo + TOLERANCIA:
+                errores.append(etiquetas[fid])
+        if errores:
+            st.error("Revisá los montos a imputar de: " + "; ".join(errores))
+        else:
+            guardar_vinculacion_manual(liq_id, {f: round(imps[f], 2) for f in sel}, usuario)
+            st.session_state["vinc_ver"] = ver + 1
+            st.session_state["vinc_msg"] = f"Liquidación #{liq_id} vinculada con {len(sel)} factura(s)."
+            st.rerun()
+
+
+def liq_vinculacion():
+    st.subheader("Vinculación de comprobantes")
+    if "vinc_msg" in st.session_state:
+        st.success(st.session_state.pop("vinc_msg"))
+    ver = st.session_state.get("vinc_ver", 0)
+    st.markdown("#### Vincular manualmente")
+    st.caption("Elegí una liquidación y marcá las facturas AFIP que le corresponden. Comparalas con el bruto.")
+    liqs = consultar(
+        "SELECT id, plataforma, nro_lote, fecha_liquidacion, bruto FROM liquidaciones ORDER BY fecha_liquidacion DESC, id DESC"
+    )
+    if liqs.empty:
+        st.info("No hay liquidaciones cargadas.")
+    else:
+        opc = {"— Elegí una liquidación —": None}
+        opc.update({
+            f"#{int(r.id)} - {r.plataforma} - {r.nro_lote or 's/lote'} - {r.fecha_liquidacion}": r
+            for r in liqs.itertuples()
+        })
+        eleg = st.selectbox("Liquidación", list(opc), key=f"vinc_liq_sel_{ver}")
+        if opc[eleg] is None:
+            st.info("Elegí una liquidación para ver su bruto y vincular facturas.")
+        else:
+            vinculacion_manual(opc[eleg], ver)
     st.markdown("#### Comprobantes vinculados")
     vinc = consultar(
         """SELECT l.id AS liquidacion, l.plataforma, l.nro_lote, f.fecha, f.tipo,
