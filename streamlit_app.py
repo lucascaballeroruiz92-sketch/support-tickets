@@ -199,7 +199,7 @@ FILA_FECHA_MONTO_RE = re.compile(r"^(\d{2}/\d{2}/\d{4}).*?(\d{1,3}(?:\.\d{3})*,\
 # Comprobante de factura: solo punto de venta y número (el tipo de letra no se usa)
 COMP_RE = re.compile(r"(?:comprobante|factura|cbte)[^\n\d]{0,30}(\d{4,5})\s?-\s?(\d{6,8})", re.I)
 PLAT_CLAVES = {
-    "naranja": "Naranja X", "banco naci": "Banco Nación", "mercado pago": "Mercado Pago",
+    "naranja": "Naranja X", "nacion servicios": "Banco Nación", "banco naci": "Banco Nación", "mercado pago": "Mercado Pago",
     "payway": "Payway", "fiserv": "Fiserv", "+pagos": "+Pagos", "credicoop": "Banco Credicoop",
     "galicia": "Banco Galicia", "santander": "Banco Santander", "bbva": "BBVA", "macro": "Banco Macro",
 }
@@ -210,6 +210,12 @@ def importe_en(linea, primero=False):
     if not nums:
         return None
     return num(nums[0] if primero else nums[-1])
+
+
+def importe_bna(linea):
+    """Importe en formato Banco Nación / Naranja: 1,234.56 o -2,689.85 (último número de la línea)."""
+    nums = re.findall(r"-?\d{1,3}(?:,\d{3})*\.\d{2}", linea)
+    return float(nums[-1].replace(",", "")) if nums else None
 
 
 def tasa_iva(s):
@@ -337,6 +343,35 @@ def extraer_liquidacion_pdf(archivo):
     datos["f_comprobantes"] = [(m[1], m[2])] if m else []
     # Cada cupón liquidado (una fila con fecha de compra e importe), incluidas las de 'Interés por pago anticipado'
     datos["f_filas"] = filas_por_fecha("\n".join(lineas))
+
+    # Liquidación Banco Nación (formato 1,234.56 y devoluciones con signo negativo)
+    if "total presentado" in sin_acentos(texto):
+        def firma_bna(cond):
+            total, hallado = 0.0, False
+            for l, s in zip(lineas, ll):
+                if cond(s):
+                    v = importe_bna(l)
+                    if v is not None:
+                        total += v
+                        hallado = True
+            return round(total, 2) if hallado else 0.0
+
+        bienes = firma_bna(lambda s: s.startswith("bienes durables"))
+        sirtac_b = firma_bna(lambda s: "sirtac" in s or s.startswith("ret iibb"))
+        iva_b = firma_bna(lambda s: s.startswith("iva 21") or s.startswith("devolucion iva") or "iva gene" in s)
+        datos["f_bruto"] = firma_bna(lambda s: s.startswith("total presentado"))
+        datos["f_com"] = firma_bna(lambda s: re.match(r"(devolucion )?arancel", s) is not None)
+        datos["f_cf"] = firma_bna(lambda s: "cargo fin" in s and "iva" not in s)
+        datos["f_iva"] = iva_b
+        datos["f_ret"] = round(bienes + sirtac_b, 2)
+        datos["f_desglose"] = {"IVA 21%": iva_b, "SIRTAC / IIBB": sirtac_b, "Bienes Durables": bienes}
+        datos["f_neto"] = firma_bna(lambda s: "neto percibido" in s)
+        mf = re.search(r"Consumos Cuotas\s*(\d{2}/\d{2}/\d{4})", texto)
+        if mf:
+            datos["f_filas"] = [{"fecha": datetime.strptime(mf[1], "%d/%m/%Y").date(), "monto": datos["f_bruto"]}]
+        ml = re.search(r"(\d{6,})\s*Nro\. de Liquidaci", texto)
+        if ml:
+            datos["f_lote"] = ml[1]
 
     if {"f_bruto", "f_neto"} <= datos.keys():
         deducc = datos["f_com"] + datos["f_cf"] + datos["f_iva"] + datos["f_ret"]
