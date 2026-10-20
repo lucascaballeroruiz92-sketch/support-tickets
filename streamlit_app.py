@@ -241,7 +241,9 @@ def extraer_liquidacion_pdf(archivo):
     if not texto.strip():
         raise ValueError("El PDF no tiene texto seleccionable (puede ser escaneado).")
 
-    lineas = [l.strip() for l in texto.splitlines() if l.strip()]
+    # Los PDF de Naranja traen prefijos '## ' en cada línea; se quitan para leer las filas de cupones
+    lineas = [re.sub(r"^[#\s]+", "", l).strip() for l in texto.splitlines()]
+    lineas = [l for l in lineas if l]
     ll = [sin_acentos(l) for l in lineas]
     datos, avisos = {}, []
 
@@ -257,9 +259,11 @@ def extraer_liquidacion_pdf(archivo):
 
     # Bruto: primera fila 'Totales'
     bruto = None
-    for l, s in zip(lineas, ll):
+    for i, s in enumerate(ll):
         if re.match(r"^totales\b", s):
-            bruto = importe_en(l, primero=True)
+            bruto = importe_en(lineas[i], primero=True)
+            if bruto is None and i + 1 < len(lineas):
+                bruto = importe_en(lineas[i + 1], primero=True)
             if bruto is not None:
                 break
     if bruto is None:
@@ -329,7 +333,8 @@ def extraer_liquidacion_pdf(archivo):
 
     m = COMP_RE.search(texto)
     datos["f_comprobantes"] = [(m[1], m[2])] if m else []
-    datos["f_filas"] = filas_por_fecha(texto)
+    # Cada cupón liquidado (una fila con fecha de compra e importe), incluidas las de 'Interés por pago anticipado'
+    datos["f_filas"] = filas_por_fecha("\n".join(lineas))
 
     if {"f_bruto", "f_neto"} <= datos.keys():
         deducc = datos["f_com"] + datos["f_cf"] + datos["f_iva"] + datos["f_ret"]
