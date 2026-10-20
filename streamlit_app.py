@@ -1108,10 +1108,12 @@ def liq_vinculacion():
     st.markdown("#### Vincular manualmente")
     st.caption("Elegí una liquidación y marcá las facturas AFIP que le corresponden. Comparalas con el bruto.")
     liqs = consultar(
-        "SELECT id, plataforma, nro_lote, fecha_liquidacion, bruto FROM liquidaciones ORDER BY fecha_liquidacion DESC, id DESC"
+        """SELECT id, plataforma, nro_lote, fecha_liquidacion, bruto FROM liquidaciones
+           WHERE id NOT IN (SELECT liquidacion_id FROM liquidacion_factura)
+           ORDER BY fecha_liquidacion DESC, id DESC"""
     )
     if liqs.empty:
-        st.info("No hay liquidaciones cargadas.")
+        st.info("No hay liquidaciones pendientes de vincular. Las ya vinculadas aparecen en la tabla de abajo.")
     else:
         opc = {"— Elegí una liquidación —": None}
         opc.update({
