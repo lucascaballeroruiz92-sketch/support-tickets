@@ -195,7 +195,7 @@ def selector_rango(key):
 # ======================= LECTURA DE PDF DE LIQUIDACIONES =======================
 NUM_RE = re.compile(r"-?\$?\s?\d{1,3}(?:\.\d{3})*,\d{2}")
 FECHA_RE = re.compile(r"\b(\d{2})[/.-](\d{2})[/.-](\d{4})\b")
-FILA_FECHA_MONTO_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\b.*?(\d{1,3}(?:\.\d{3})*,\d{2})")
+FILA_FECHA_MONTO_RE = re.compile(r"^(\d{2}/\d{2}/\d{4}).*?(\d{1,3}(?:\.\d{3})*,\d{2})")
 # Comprobante de factura: solo punto de venta y número (el tipo de letra no se usa)
 COMP_RE = re.compile(r"(?:comprobante|factura|cbte)[^\n\d]{0,30}(\d{4,5})\s?-\s?(\d{6,8})", re.I)
 PLAT_CLAVES = {
@@ -257,15 +257,17 @@ def extraer_liquidacion_pdf(archivo):
                     hallado = True
         return round(total, 2) if hallado else 0.0
 
-    # Bruto: primera fila 'Totales'
-    bruto = None
-    for i, s in enumerate(ll):
-        if re.match(r"^totales\b", s):
-            bruto = importe_en(lineas[i], primero=True)
-            if bruto is None and i + 1 < len(lineas):
-                bruto = importe_en(lineas[i + 1], primero=True)
-            if bruto is not None:
-                break
+    # Bruto: suma de todos los cupones liquidados (cada fila con fecha de compra e importe).
+    # Respaldo: el mayor importe del bloque 'Totales'.
+    filas_cupones = filas_por_fecha("\n".join(lineas))
+    bruto = round(sum(f["monto"] for f in filas_cupones), 2) if filas_cupones else None
+    if not bruto:
+        cands = []
+        for i, s in enumerate(ll):
+            if re.match(r"^totales\b", s):
+                for l in lineas[i:i + 4]:
+                    cands += [num(x) for x in NUM_RE.findall(l)]
+        bruto = max(cands) if cands else None
     if bruto is None:
         for i, s in enumerate(ll):
             if re.search(r"total presentado|importe total|total ventas|venta total|total cupones", s):
