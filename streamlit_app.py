@@ -248,7 +248,8 @@ def numero_lote_liquidacion(lineas):
         if not m:
             continue
         for cand in (l[:m.start()], lineas[i - 1] if i > 0 else ""):
-            d = re.findall(r"\d{6,}", cand)
+            cand = re.sub(r"\d{2}-\d{8}-\d", " ", cand)  # descarta CUIT (ej.: 33-62136455-9)
+            d = re.findall(r"(?<![\d-])\d{6,}(?![\d-])", cand)
             if d:
                 return d[-1]
     return None
@@ -387,7 +388,7 @@ def extraer_liquidacion_pdf(archivo):
         if mf:
             datos["f_filas"] = [{"fecha": datetime.strptime(mf[1], "%d/%m/%Y").date(), "monto": datos["f_bruto"]}]
         # Banco Nación: el número de liquidación es el dato de la línea 'Nro. de Liquidación' (ej.: 0000013949016)
-        ml = re.search(r"(\d{6,})\s*Nro\.?\s*de\s*Liquidaci", texto, re.I)
+        ml = re.search(r"(?<![\d-])(\d{6,})\s*Nro\.?\s*de\s*Liquidaci", texto, re.I)
         if ml:
             datos["f_lote"] = ml[1]
 
