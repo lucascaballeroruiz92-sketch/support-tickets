@@ -315,8 +315,6 @@ def extraer_liquidacion_pdf(archivo):
                 break
     if neto is not None:
         datos["f_neto"] = abs(neto)
-    else:
-        avisos.append("No se encontró el neto liquidado.")
 
     m = re.search(r"Fecha de Pago\s*:?\s*(\d{2}/\d{2}/\d{4})", texto, re.I)
     fs = m.group(1) if m else None
@@ -370,7 +368,7 @@ def extraer_liquidacion_pdf(archivo):
         datos["f_iva"] = iva_b
         datos["f_ret"] = round(bienes + sirtac_b, 2)
         datos["f_desglose"] = {"IVA 21%": iva_b, "SIRTAC / IIBB": sirtac_b, "Bienes Durables": bienes}
-        datos["f_neto"] = firma_bna(lambda s: "neto percibido" in s)
+        datos["f_neto"] = firma_bna(lambda s: "neto percibido" in s) or datos.get("f_neto")
         mf = re.search(r"Consumos Cuotas\s*(\d{2}/\d{2}/\d{4})", texto)
         if mf:
             datos["f_filas"] = [{"fecha": datetime.strptime(mf[1], "%d/%m/%Y").date(), "monto": datos["f_bruto"]}]
@@ -378,11 +376,18 @@ def extraer_liquidacion_pdf(archivo):
         if ml:
             datos["f_lote"] = ml[1]
 
-    if {"f_bruto", "f_neto"} <= datos.keys():
-        deducc = datos["f_com"] + datos["f_cf"] + datos["f_iva"] + datos["f_ret"]
-        dif = datos["f_bruto"] - deducc - datos["f_neto"]
-        if abs(dif) > TOLERANCIA:
-            avisos.append(f"El PDF no cierra: bruto − deducciones − neto da {fmt(dif)}. Revisa los importes.")
+    # Neto: el informado en el PDF (p. ej. 'Neto Percibido'). Si no aparece, neto = bruto − deducciones.
+    if "f_bruto" in datos:
+        deducc = round(datos["f_com"] + datos["f_cf"] + datos["f_iva"] + datos["f_ret"], 2)
+        neto_calc = round(datos["f_bruto"] - deducc, 2)
+        if datos.get("f_neto"):
+            if abs(datos["f_neto"] - neto_calc) > TOLERANCIA:
+                avisos.append(f"El neto informado en el PDF ({fmt(datos['f_neto'])}) no coincide con bruto − deducciones ({fmt(neto_calc)}). Se usa el informado.")
+        else:
+            datos["f_neto"] = neto_calc
+            datos["f_neto_calculado"] = True
+    else:
+        avisos.append("No se encontró el importe de 'bruto'.")
 
     datos["f_texto"] = texto
     return datos, avisos
@@ -698,15 +703,15 @@ def conciliar(usuario):
             m for m in movs.itertuples()
             if m.mid not in usados and (f_pago is None or abs((date.fromisoformat(m.fecha) - f_pago).days) <= 7)
         ]
-        ok = next((m for m in ventana if abs(abs(m.monto) - factura_menos_ded) <= TOLERANCIA), None)
+        # Primero se busca el crédito igual al neto del PDF; si no hay, igual a factura − deducciones.
+        ok = None
+        if L.neto_pdf:
+            ok = next((m for m in ventana if abs(abs(m.monto) - float(L.neto_pdf)) <= TOLERANCIA), None)
+        if ok is None:
+            ok = next((m for m in ventana if abs(abs(m.monto) - factura_menos_ded) <= TOLERANCIA), None)
         if ok is not None:
             usados.add(ok.mid)
             acred, f_ac, estado = float(ok.monto), ok.fecha, "Conciliada"
-        elif L.neto_pdf:
-            ok2 = next((m for m in ventana if abs(abs(m.monto) - float(L.neto_pdf)) <= TOLERANCIA), None)
-            if ok2 is not None:
-                usados.add(ok2.mid)
-                acred, f_ac, estado = float(ok2.monto), ok2.fecha, "Con diferencia"
         dif = round(abs(acred) - factura_menos_ded, 2) if acred is not None else None
         ejecutar(
             """UPDATE liquidaciones SET neto_acreditado=?, fecha_acreditacion=?, diferencia=?, estado=?,
