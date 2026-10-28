@@ -362,7 +362,7 @@ def extraer_liquidacion_pdf(archivo):
     datos["f_filas"] = filas_por_fecha("\n".join(lineas))
 
     # Liquidación Banco Nación (formato 1,234.56 y devoluciones con signo negativo)
-    if "total presentado" in sin_acentos(texto):
+    if "total presentado" in sin_acentos(texto) or re.search(r"nro\.?\s*de\s*liquidaci", texto, re.I) and "neto percibido" in sin_acentos(texto):
         def firma_bna(cond):
             total, hallado = 0.0, False
             for l, s in zip(lineas, ll):
@@ -386,7 +386,8 @@ def extraer_liquidacion_pdf(archivo):
         mf = re.search(r"Consumos Cuotas\s*(\d{2}/\d{2}/\d{4})", texto)
         if mf:
             datos["f_filas"] = [{"fecha": datetime.strptime(mf[1], "%d/%m/%Y").date(), "monto": datos["f_bruto"]}]
-        ml = re.search(r"(\d{6,})\s*Nro\. de Liquidaci", texto)
+        # Banco Nación: el número de liquidación es el dato de la línea 'Nro. de Liquidación' (ej.: 0000013949016)
+        ml = re.search(r"(\d{6,})\s*Nro\.?\s*de\s*Liquidaci", texto, re.I)
         if ml:
             datos["f_lote"] = ml[1]
 
@@ -1232,7 +1233,7 @@ def liq_planilla():
     st.subheader("Planilla de liquidaciones por comprobante")
     st.caption("Una fila por factura. Las deducciones de cada liquidación se reparten según el peso de la factura.")
     df = consultar(
-        """SELECT l.id AS liq, l.plataforma, l.nro_lote, l.fecha_liquidacion, l.fecha_acreditacion,
+        """SELECT l.id AS liq, l.plataforma, l.nro_lote AS lote, l.fecha_liquidacion, l.fecha_acreditacion,
                   l.neto_acreditado, l.comision, l.costo_financiero, l.iva_comision, l.retenciones,
                   f.fecha AS fecha_fac, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total, COALESCE(lf.monto, f.total) AS imp,
                   (SELECT SUM(COALESCE(lf2.monto, f2.total)) FROM liquidacion_factura lf2 JOIN facturas f2 ON f2.id = lf2.factura_id
@@ -1254,7 +1255,7 @@ def liq_planilla():
         "CLIENTE": df.razon_social,
         "MONTO FACTURA": df.total,
         "MONTO IMPUTADO A LIQ.": df.imp,
-        "LIQ. N°": df.liq,
+        "LIQ. N°": df.lote,
         "PLATAFORMA": df.plataforma,
         "ARANCEL": df.comision * peso,
         "INTERÉS / FINANCIACIÓN": df.costo_financiero * peso,
