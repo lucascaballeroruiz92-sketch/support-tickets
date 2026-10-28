@@ -899,8 +899,13 @@ def vista_ventas():
 def liq_carga():
     st.subheader("Carga de liquidación")
     st.caption("Sube el PDF de la liquidación y pulsa Cargar. Se guarda tal como viene en el PDF.")
-    pdf_liq = st.file_uploader("PDF de liquidación", type=["pdf"], key="up_pdf_liq")
-    if pdf_liq is not None and st.button("Cargar", type="primary"):
+    if "carga_msg" in st.session_state:
+        st.success(st.session_state.pop("carga_msg"))
+        for a in st.session_state.pop("carga_avisos", []):
+            st.warning(a)
+    ver = st.session_state.get("carga_ver", 0)
+    pdf_liq = st.file_uploader("PDF de liquidación", type=["pdf"], key=f"up_pdf_liq_{ver}")
+    if pdf_liq is not None and st.button("Cargar", type="primary", key=f"btn_cargar_{ver}"):
         try:
             datos, avisos = extraer_liquidacion_pdf(pdf_liq)
             lote = datos.get("f_lote", "")
@@ -913,12 +918,16 @@ def liq_carga():
                 st.warning(f"Ya existe la liquidación {lote} (#{int(ya.id.iloc[0])}). No se duplicó.")
             else:
                 liq_id, estado = guardar_liquidacion_pdf(datos, usuario, pdf_liq.name)
-                st.success(f"Liquidación #{liq_id} cargada. Estado: {estado}.")
-                for a in avisos:
-                    st.warning(a)
+                st.session_state["carga_ver"] = ver + 1
+                st.session_state["carga_msg"] = f"Liquidación #{liq_id} cargada. Estado: {estado}."
+                st.session_state["carga_avisos"] = avisos
+                st.session_state["carga_rerun"] = True
         except Exception as e:
             st.error(f"No se pudo procesar el PDF: {e}")
             st.code(traceback.format_exc())
+
+    if st.session_state.pop("carga_rerun", False):
+        st.rerun()
 
     st.markdown("#### Liquidaciones cargadas")
     d2, h2 = selector_rango("liq")
