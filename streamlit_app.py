@@ -1,3 +1,4 @@
+import os
 import re
 import sqlite3
 import traceback
@@ -13,7 +14,7 @@ import pdfplumber
 import streamlit as st
 
 # ======================= CONFIGURACIÓN =======================
-DB_PATH = "conciliacion.db"
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conciliacion.db")
 USUARIOS = {"socio1": "clave1", "socio2": "clave2"}  # Cambiar. Recomendado: st.secrets
 TOLERANCIA = 0.05  # diferencia máxima aceptada en pesos
 
@@ -369,17 +370,7 @@ def extraer_liquidacion_pdf(archivo):
         mf = re.search(r"Consumos Cuotas\s*(\d{2}/\d{2}/\d{4})", texto)
         if mf:
             datos["f_filas"] = [{"fecha": datetime.strptime(mf[1], "%d/%m/%Y").date(), "monto": datos["f_bruto"]}]
-        # Número de liquidación: número de 10+ dígitos ubicado junto a 'Nro. de Liquidación' (misma posición en todas)
-        ml = None
-        for i, s in enumerate(ll):
-            if "nro. de liquidaci" in s:
-                candidatos = [lineas[i], lineas[i - 1] if i > 0 else "", lineas[i + 1] if i + 1 < len(lineas) else ""]
-                for cand in candidatos:
-                    m_ = re.search(r"(?<![\d-])(\d{10,})(?![\d-])", cand)
-                    if m_:
-                        ml = m_
-                        break
-                break
+        ml = re.search(r"(\d{6,})\s*Nro\. de Liquidaci", texto)
         if ml:
             datos["f_lote"] = ml[1]
 
