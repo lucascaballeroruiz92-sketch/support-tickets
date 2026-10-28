@@ -240,6 +240,20 @@ def filas_por_fecha(texto):
     return filas
 
 
+def numero_lote_liquidacion(lineas):
+    """Número de liquidación: el dato que va justo antes de 'Nro. de Liquidación'.
+    Si ese dato quedó en la línea anterior por la extracción del PDF, también lo toma."""
+    for i, l in enumerate(lineas):
+        m = re.search(r"nro\.?\s*de\s*liquidaci", l, re.I)
+        if not m:
+            continue
+        for cand in (l[:m.start()], lineas[i - 1] if i > 0 else ""):
+            d = re.findall(r"\d{6,}", cand)
+            if d:
+                return d[-1]
+    return None
+
+
 def extraer_liquidacion_pdf(archivo):
     """Lee el PDF de la liquidación y separa los impuestos por alícuota y tipo."""
     archivo.seek(0)
@@ -332,9 +346,9 @@ def extraer_liquidacion_pdf(archivo):
     if m:
         datos["f_lote"] = m.group(1)
     # Número de liquidación: el dato que va justo antes de 'Nro. de Liquidación' (Banco Nación, y otros)
-    m = re.search(r"(\d{6,})\s*Nro\.?\s*de\s*Liquidaci", texto, re.I)
-    if m:
-        datos["f_lote"] = m.group(1)
+    lote_liq = numero_lote_liquidacion(lineas)
+    if lote_liq:
+        datos["f_lote"] = lote_liq
 
     tl = sin_acentos(texto)
     for clave, nombre in PLAT_CLAVES.items():
@@ -913,7 +927,7 @@ def liq_carga():
            ORDER BY fecha_liquidacion DESC""",
         (d2, h2),
     )
-    st.dataframe(liqs.drop(columns=["id"]), hide_index=True)
+    st.dataframe(liqs.drop(columns=["id"]).rename(columns={"nro_lote": "Nº liquidación"}), hide_index=True)
 
     st.markdown("#### Borrar todas las liquidaciones")
     st.caption("Borra todas las liquidaciones cargadas, con sus impuestos, filas, comprobantes y vinculaciones. No borra facturas AFIP ni extractos.")
