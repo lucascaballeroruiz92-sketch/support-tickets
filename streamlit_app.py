@@ -242,7 +242,11 @@ def filas_por_fecha(texto):
 
 def numero_lote_liquidacion(lineas):
     """Número de liquidación: el dato que va justo antes de 'Nro. de Liquidación'.
-    Si ese dato quedó en la línea anterior por la extracción del PDF, también lo toma."""
+    Primero busca en el texto completo (aunque el PDF corte la línea); si no, línea por línea."""
+    plano = " ".join(lineas)
+    m_plano = re.search(r"(?<![\d-])(\d{6,})\D{0,3}nro\.?\s*de\s*liquidaci", plano, re.I)
+    if m_plano:
+        return m_plano[1]
     for i, l in enumerate(lineas):
         m = re.search(r"nro\.?\s*de\s*liquidaci", l, re.I)
         if not m:
@@ -326,6 +330,8 @@ def extraer_liquidacion_pdf(archivo):
             neto = importe_en(lineas[i])
             if neto is None and i + 1 < len(lineas):
                 neto = importe_en(lineas[i + 1])
+            if neto is None and i > 0:
+                neto = importe_en(lineas[i - 1])
             if neto is not None:
                 break
     if neto is not None:
@@ -350,6 +356,8 @@ def extraer_liquidacion_pdf(archivo):
     lote_liq = numero_lote_liquidacion(lineas)
     if lote_liq:
         datos["f_lote"] = lote_liq
+    elif "f_lote" in datos and re.search(r"\d{2}-\d{8}-\d", datos["f_lote"] or ""):
+        datos.pop("f_lote", None)
 
     tl = sin_acentos(texto)
     for clave, nombre in PLAT_CLAVES.items():
@@ -710,7 +718,7 @@ def conciliar(usuario):
     movs = consultar("SELECT rowid AS mid, fecha, descripcion, monto FROM extracto_movimientos")
     usados, filas = set(), []
     for L in liqs.itertuples():
-        ded = sum(float(x or 0) for x in (L.comision, L.costo_financiero, L.iva_comision, L.retenciones))
+        ded = sum(0.0 if pd.isna(x) else float(x) for x in (L.comision, L.costo_financiero, L.iva_comision, L.retenciones))
         base = float(L.facturado) if L.n_fac > 0 else float(L.bruto or 0)
         factura_menos_ded = round(base - ded, 2)
         f_pago = date.fromisoformat(L.fecha_liquidacion) if L.fecha_liquidacion else None
@@ -721,7 +729,7 @@ def conciliar(usuario):
         ]
         # Primero se busca el crédito igual al neto del PDF; si no hay, igual a factura − deducciones.
         ok = None
-        if L.neto_pdf:
+        if pd.notna(L.neto_pdf):
             ok = next((m for m in ventana if abs(abs(m.monto) - float(L.neto_pdf)) <= TOLERANCIA), None)
         if ok is None:
             ok = next((m for m in ventana if abs(abs(m.monto) - factura_menos_ded) <= TOLERANCIA), None)
@@ -738,7 +746,7 @@ def conciliar(usuario):
             "Liquidación #": int(L.id), "Plataforma": L.plataforma, "Lote": L.nro_lote,
             "Fecha pago": L.fecha_liquidacion, "Facturado": base, "Deducciones": ded,
             "Factura − deducciones": factura_menos_ded,
-            "Neto según PDF": float(L.neto_pdf) if L.neto_pdf else None,
+            "Neto según PDF": float(L.neto_pdf) if pd.notna(L.neto_pdf) else None,
             "Acreditado en extracto": acred,
             "Dif. vs factura − ded.": dif,
             "Estado": estado,
@@ -1256,7 +1264,7 @@ def liq_planilla():
            ORDER BY f.fecha, l.id"""
     )
     if df.empty:
-        st.info("Todavía no hay comprobantes vinculados. Usa 'Vincular factura' primero.")
+        st.info("Todavía no hay comprobantes vinculados. Vinculá facturas en Vinculación de comprobantes primero.")
         return
     imp = consultar("SELECT liquidacion_id, impuesto, SUM(monto) AS monto FROM liquidacion_impuestos GROUP BY liquidacion_id, impuesto")
     imp_p = imp.pivot(index="liquidacion_id", columns="impuesto", values="monto").fillna(0) if not imp.empty else pd.DataFrame()
