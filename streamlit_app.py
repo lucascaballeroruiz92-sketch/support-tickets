@@ -426,10 +426,11 @@ def guardar_liquidacion_pdf(datos, usuario, nombre_pdf):
     """Guarda la liquidación tal cual está en el PDF. No vincula facturas (eso es otro paso)."""
     f_liq = datos.get("f_fliq") or date.today()
     bruto = datos.get("f_bruto", 0.0)
-    com = datos.get("f_com", 0.0)
-    cf = datos.get("f_cf", 0.0)
-    iva = datos.get("f_iva", 0.0)
-    ret = datos.get("f_ret", 0.0)
+    # Las deducciones se guardan siempre como importes positivos; el signo se aplica al restar
+    com = abs(datos.get("f_com", 0.0))
+    cf = abs(datos.get("f_cf", 0.0))
+    iva = abs(datos.get("f_iva", 0.0))
+    ret = abs(datos.get("f_ret", 0.0))
     esperado, _, estado = calcular(bruto, com, cf, iva, ret, None, None)
     plataforma = datos.get("f_plat", "Sin especificar")
     lote = datos.get("f_lote", "")
@@ -957,7 +958,10 @@ def liq_carga():
            ORDER BY fecha_liquidacion DESC""",
         (d2, h2),
     )
-    st.dataframe(liqs.drop(columns=["id"]).rename(columns={"nro_lote": "Nº liquidación"}), hide_index=True)
+    tabla_liq = liqs.drop(columns=["id"]).rename(columns={"nro_lote": "Nº liquidación"})
+    for c in ["comision", "costo_financiero", "iva_comision", "retenciones"]:
+        tabla_liq[c] = tabla_liq[c].abs()  # se muestran sin signo; la resta se hace al calcular
+    st.dataframe(tabla_liq, hide_index=True)
 
     st.markdown("#### Borrar todas las liquidaciones")
     st.caption("Borra todas las liquidaciones cargadas, con sus impuestos, filas, comprobantes y vinculaciones. No borra facturas AFIP ni extractos.")
