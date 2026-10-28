@@ -913,7 +913,7 @@ def liq_carga():
            ORDER BY fecha_liquidacion DESC""",
         (d2, h2),
     )
-    st.dataframe(liqs, hide_index=True)
+    st.dataframe(liqs.drop(columns=["id"]), hide_index=True)
 
     st.markdown("#### Borrar todas las liquidaciones")
     st.caption("Borra todas las liquidaciones cargadas, con sus impuestos, filas, comprobantes y vinculaciones. No borra facturas AFIP ni extractos.")
