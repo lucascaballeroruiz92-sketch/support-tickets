@@ -244,9 +244,14 @@ def numero_lote_liquidacion(lineas):
     """Número de liquidación: el dato que va justo antes de 'Nro. de Liquidación'.
     Primero busca en el texto completo (aunque el PDF corte la línea); si no, línea por línea."""
     plano = " ".join(lineas)
+    plano = re.sub(r"\d{2}-\d{8}-\d", " ", plano)  # quita CUIT antes de buscar
     m_plano = re.search(r"(?<![\d-])(\d{6,})\D{0,3}nro\.?\s*de\s*liquidaci", plano, re.I)
     if m_plano:
         return m_plano[1]
+    # Número que va después de la etiqueta (si el PDF la pone antes del número)
+    m_desp = re.search(r"nro\.?\s*de\s*liquidaci\w*\W{0,40}?(?<![\d-])(\d{8,16})(?![\d-])", plano, re.I)
+    if m_desp:
+        return m_desp[1]
     for i, l in enumerate(lineas):
         m = re.search(r"nro\.?\s*de\s*liquidaci", l, re.I)
         if not m:
@@ -911,6 +916,9 @@ def liq_carga():
         st.success(st.session_state.pop("carga_msg"))
         for a in st.session_state.pop("carga_avisos", []):
             st.warning(a)
+    if "carga_texto_diag" in st.session_state:
+        with st.expander("Texto leído del PDF (para revisar el número de liquidación)", expanded=True):
+            st.text(st.session_state.pop("carga_texto_diag"))
     ver = st.session_state.get("carga_ver", 0)
     pdf_liq = st.file_uploader("PDF de liquidación", type=["pdf"], key=f"up_pdf_liq_{ver}")
     if pdf_liq is not None and st.button("Cargar", type="primary", key=f"btn_cargar_{ver}"):
@@ -919,6 +927,7 @@ def liq_carga():
             lote = datos.get("f_lote", "")
             if not lote:
                 avisos.append("No se detectó el número de liquidación en el PDF.")
+                st.session_state["carga_texto_diag"] = datos.get("f_texto", "")[:4000]
             ya = consultar("SELECT id FROM liquidaciones WHERE nro_lote = ? AND nro_lote != ''", (lote,)) if lote else pd.DataFrame()
             if not datos.get("f_bruto"):
                 st.error("No se encontró el bruto en el PDF. No se guardó nada.")
