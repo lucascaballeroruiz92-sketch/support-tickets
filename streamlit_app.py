@@ -909,6 +909,8 @@ def liq_carga():
         try:
             datos, avisos = extraer_liquidacion_pdf(pdf_liq)
             lote = datos.get("f_lote", "")
+            if not lote:
+                avisos.append("No se detectó el número de liquidación en el PDF.")
             ya = consultar("SELECT id FROM liquidaciones WHERE nro_lote = ? AND nro_lote != ''", (lote,)) if lote else pd.DataFrame()
             if not datos.get("f_bruto"):
                 st.error("No se encontró el bruto en el PDF. No se guardó nada.")
@@ -919,7 +921,7 @@ def liq_carga():
             else:
                 liq_id, estado = guardar_liquidacion_pdf(datos, usuario, pdf_liq.name)
                 st.session_state["carga_ver"] = ver + 1
-                st.session_state["carga_msg"] = f"Liquidación #{liq_id} cargada. Estado: {estado}."
+                st.session_state["carga_msg"] = f"Liquidación Nº {lote or 's/n'} (#{liq_id}) cargada. Estado: {estado}."
                 st.session_state["carga_avisos"] = avisos
                 st.session_state["carga_rerun"] = True
         except Exception as e:
