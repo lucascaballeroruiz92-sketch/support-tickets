@@ -333,6 +333,10 @@ def extraer_liquidacion_pdf(archivo):
     m = re.search(r"Tipo y N\S*\s*:?\s*([A-Za-z]-\d{4}-\d+)", texto, re.I)
     if m:
         datos["f_lote"] = m.group(1)
+    # Número de liquidación: el dato que va justo antes de 'Nro. de Liquidación' (Banco Nación, y otros)
+    m = re.search(r"(\d{6,})\s*Nro\.?\s*de\s*Liquidaci", texto, re.I)
+    if m:
+        datos["f_lote"] = m.group(1)
 
     tl = sin_acentos(texto)
     for clave, nombre in PLAT_CLAVES.items():
