@@ -1,4 +1,6 @@
-streamlit>=1.37
+streamlit
 pandas
-openpyxl
 pdfplumber
+openpyxl
+sqlalchemy
+psycopg2-binary
