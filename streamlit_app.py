@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS actividad (
     id SERIAL PRIMARY KEY,
     momento TEXT, usuario TEXT, accion TEXT, detalle TEXT
 );
+CREATE TABLE IF NOT EXISTS cobros_directos (
+    factura_id INTEGER PRIMARY KEY,
+    medio TEXT, monto DOUBLE PRECISION, fecha TEXT, cargado_por TEXT
+);
 """
 
 
@@ -511,7 +515,7 @@ def borrar_todos_los_datos(usuario):
         con.exec_driver_sql(
             "TRUNCATE liquidacion_impuestos, liquidacion_filas, liquidacion_comprobantes, "
             "liquidacion_pdf, liquidacion_factura, liquidaciones, extracto_movimientos, "
-            "extractos, facturas, actividad RESTART IDENTITY"
+            "extractos, facturas, cobros_directos, actividad RESTART IDENTITY"
         )
 
 
@@ -890,6 +894,42 @@ def guardar_venta_manual(fecha, cliente, total, usuario):
     registrar("Venta manual", f"{fmt(total)} {cliente or ''} ({fecha.isoformat()})")
 
 
+def marcar_cobro_directo(factura_id, medio, monto, usuario):
+    """Marca una factura como cobrada por efectivo o transferencia (sin liquidación)."""
+    ejecutar(
+        """INSERT INTO cobros_directos (factura_id, medio, monto, fecha, cargado_por) VALUES (?,?,?,?,?)
+           ON CONFLICT (factura_id) DO UPDATE SET medio=EXCLUDED.medio, monto=EXCLUDED.monto,
+           fecha=EXCLUDED.fecha, cargado_por=EXCLUDED.cargado_por""",
+        (int(factura_id), medio, float(monto), date.today().isoformat(), usuario),
+    )
+    registrar("Cobro directo", f"Factura #{factura_id} {medio} {fmt(monto)}")
+
+
+def cobro_directo_ui(usuario):
+    st.markdown("#### Marcar factura cobrada en efectivo o transferencia")
+    st.caption("Para facturas que no se cobraron con tarjeta. Quedan como pagadas en Contabilidad → Facturas impagas. Si se cobró en parte con tarjeta, cargá solo lo cobrado por este medio.")
+    pend = consultar(
+        """SELECT f.id, f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total FROM facturas f
+           WHERE f.id NOT IN (SELECT factura_id FROM cobros_directos)
+             AND f.id NOT IN (SELECT factura_id FROM liquidacion_factura)
+           ORDER BY f.fecha DESC"""
+    )
+    if pend.empty:
+        st.info("No hay facturas pendientes de marcar.")
+        return
+    etiq = {int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | Total {fmt(r.total)}" for r in pend.itertuples()}
+    total_de = {int(r.id): float(r.total) for r in pend.itertuples()}
+    with st.form("form_cobro_directo", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        fid = c1.selectbox("Factura", list(etiq), format_func=lambda i: etiq[i])
+        medio = c2.selectbox("Medio de cobro", ["Efectivo", "Transferencia"])
+        monto = c3.number_input("Monto cobrado (0 = total de la factura)", min_value=0.0, step=100.0, format="%.2f")
+        if st.form_submit_button("Marcar como cobrada", type="primary"):
+            m = float(monto) if monto > 0 else total_de[fid]
+            marcar_cobro_directo(fid, medio, m, usuario)
+            st.success(f"Factura marcada como cobrada por {medio.lower()} ({fmt(m)}).")
+
+
 # ======================= 1. VENTAS =======================
 def vista_ventas():
     st.subheader("Importar facturas emitidas desde AFIP")
@@ -917,6 +957,8 @@ def vista_ventas():
             else:
                 guardar_venta_manual(f_v, cli.strip(), float(monto), usuario)
                 st.success(f"Venta manual cargada por {fmt(monto)}.")
+
+    cobro_directo_ui(usuario)
 
     st.markdown("#### Facturas cargadas")
     d, h = selector_rango("fact")
@@ -1283,21 +1325,22 @@ def vista_contabilidad(nombre):
         d5, h5 = selector_rango("r2")
         r2 = consultar(
             """SELECT f.id, f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total,
-                      (SELECT COUNT(*) FROM liquidacion_factura lf WHERE lf.factura_id = f.id) AS vinc
+                      (SELECT COUNT(*) FROM liquidacion_factura lf WHERE lf.factura_id = f.id) AS vinc,
+                      (SELECT COUNT(*) FROM cobros_directos cd WHERE cd.factura_id = f.id) AS cobro_dir
                FROM facturas f WHERE f.fecha BETWEEN ? AND ? ORDER BY f.fecha""",
             (d5, h5),
         )
         if r2.empty:
             st.info("No hay facturas en el rango.")
         else:
-            impagas = r2[r2.vinc == 0]
+            impagas = r2[(r2.vinc == 0) & (r2.cobro_dir == 0)]
             st.metric("Total impago", fmt(impagas.total.sum()))
             st.caption("Las facturas tachadas en rojo ya están vinculadas a una liquidación.")
             filas_html = []
             for r in r2.itertuples():
-                vinculada = int(r.vinc) > 0
+                vinculada = int(r.vinc) > 0 or int(r.cobro_dir) > 0
                 estilo = "text-decoration: line-through; color: red;" if vinculada else ""
-                celdas = [str(r.fecha), f"{r.tipo} {r.punto_venta}-{r.numero}", str(r.razon_social), fmt(r.total), "Sí" if vinculada else "No"]
+                celdas = [str(r.fecha), f"{r.tipo} {r.punto_venta}-{r.numero}", str(r.razon_social), fmt(r.total), "Sí" if int(r.vinc) > 0 else ("Cobrada otro medio" if int(r.cobro_dir) > 0 else "No")]
                 tds = "".join(f"<td style='padding:4px 8px;border-bottom:1px solid #ddd;{estilo}'>{html_lib.escape(c)}</td>" for c in celdas)
                 filas_html.append(f"<tr>{tds}</tr>")
             encabezado = "".join(f"<th style='padding:4px 8px;text-align:left;border-bottom:2px solid #999'>{h}</th>" for h in ["Fecha", "Comprobante", "Razón social", "Total", "Vinculada"])
