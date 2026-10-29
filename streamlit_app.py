@@ -94,7 +94,9 @@ def get_engine():
         st.error("Falta configurar DATABASE_URL en Streamlit Secrets.")
         st.stop()
     if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
+        url = "postgresql+psycopg://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
     return create_engine(url, pool_pre_ping=True)
 
 
