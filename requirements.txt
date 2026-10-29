@@ -3,4 +3,4 @@ pandas
 pdfplumber
 openpyxl
 sqlalchemy
-psycopg2-binary
+psycopg[binary]
