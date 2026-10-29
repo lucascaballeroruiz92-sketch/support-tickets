@@ -3,7 +3,6 @@ import re
 import traceback
 import html as html_lib
 import unicodedata
-from contextlib import closing
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from itertools import combinations
@@ -101,12 +100,14 @@ def get_engine():
 
 
 def _sql(sql):
-    """Las consultas se escriben con '?'; psycopg2 usa '%s'."""
+    """Las consultas se escriben con '?'; el driver usa '%s'."""
     return sql.replace("?", "%s")
 
 
 def init_db():
     with get_engine().begin() as con:
+        # Bloqueo: evita que dos sesiones creen las tablas a la vez
+        con.exec_driver_sql("SELECT pg_advisory_xact_lock(724291)")
         for sentencia in SCHEMA.split(";"):
             if sentencia.strip():
                 con.exec_driver_sql(sentencia)
@@ -126,7 +127,7 @@ def ejecutar_id(sql, params=()):
 
 def consultar(sql, params=()):
     with get_engine().connect() as con:
-        return pd.read_sql_query(_sql(sql), con.connection, params=tuple(params))
+        return pd.read_sql_query(_sql(sql), con, params=tuple(params))
 
 
 def ahora():
@@ -1164,7 +1165,7 @@ def liq_planilla():
         return
     imp = consultar("SELECT liquidacion_id, impuesto, SUM(monto) AS monto FROM liquidacion_impuestos GROUP BY liquidacion_id, impuesto")
     imp_p = imp.pivot(index="liquidacion_id", columns="impuesto", values="monto").fillna(0) if not imp.empty else pd.DataFrame()
-    peso = df.imp / df.tot_liq
+    peso = (df.imp / df.tot_liq.where(df.tot_liq != 0)).fillna(0)
     out = pd.DataFrame({
         "FECHA FAC.": pd.to_datetime(df.fecha_fac).dt.strftime("%d/%m/%Y"),
         "COMPROBANTE": df.tipo + " " + df.punto_venta.astype(str) + "-" + df.numero.astype(str),
@@ -1266,7 +1267,7 @@ def vista_contabilidad(nombre):
         if r1.empty:
             st.info("No hay facturas vinculadas en el rango.")
         else:
-            p = r1.facturado / r1.tot
+            p = (r1.facturado / r1.tot.where(r1.tot != 0)).fillna(0)
             r1["descuentos"] = p * (r1.comision + r1.costo_financiero + r1.iva_comision + r1.retenciones)
             r1["neto_final"] = p * r1.neto_acreditado.fillna(r1.neto_esperado)
             r1["factura"] = r1.tipo + " " + r1.punto_venta.astype(str) + "-" + r1.numero.astype(str)
