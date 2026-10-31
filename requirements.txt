@@ -4,3 +4,4 @@ pdfplumber
 openpyxl
 sqlalchemy
 psycopg[binary]
+fpdf2
