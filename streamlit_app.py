@@ -74,13 +74,14 @@ CREATE TABLE IF NOT EXISTS extracto_movimientos (
     id SERIAL PRIMARY KEY,
     extracto_id INTEGER, fecha TEXT, descripcion TEXT, monto DOUBLE PRECISION
 );
+CREATE TABLE IF NOT EXISTS cobros_directos (
+    id SERIAL PRIMARY KEY,
+    factura_id INTEGER, medio TEXT, fecha TEXT, monto DOUBLE PRECISION,
+    cargado_por TEXT, fecha_carga TEXT
+);
 CREATE TABLE IF NOT EXISTS actividad (
     id SERIAL PRIMARY KEY,
     momento TEXT, usuario TEXT, accion TEXT, detalle TEXT
-);
-CREATE TABLE IF NOT EXISTS cobros_directos (
-    factura_id INTEGER PRIMARY KEY,
-    medio TEXT, monto DOUBLE PRECISION, fecha TEXT, cargado_por TEXT
 );
 """
 
@@ -364,7 +365,7 @@ def extraer_liquidacion_pdf(archivo):
     if neto is not None:
         datos["f_neto"] = abs(neto)
 
-    m = re.search(r"Fecha de Pago\s*:?\s*(\d{2}/\d{2}/\d{4})", texto, re.I)
+    m = re.search(r"Fecha de Emisi\w*\s*:?\s*(\d{2}/\d{2}/\d{4})", texto, re.I) or re.search(r"Fecha de Pago\s*:?\s*(\d{2}/\d{2}/\d{4})", texto, re.I)
     fs = m.group(1) if m else None
     if not fs:
         m = FECHA_RE.search(texto)
@@ -821,10 +822,10 @@ SUBMENUS = {
         "Extractos Bancarios": ["Carga de extractos", "Conciliación"],
     },
     "📈 Contabilidad": [
-        "Facturas vs neto final",
+        "Facturación vs. neto liquidado",
         "Facturas impagas",
-        "Impuestos para DDJJ",
-        "Resumen general",
+        "Impuestos para declaración jurada",
+        "Resumen de liquidaciones por plataforma",
     ],
 }
 
@@ -894,42 +895,6 @@ def guardar_venta_manual(fecha, cliente, total, usuario):
     registrar("Venta manual", f"{fmt(total)} {cliente or ''} ({fecha.isoformat()})")
 
 
-def marcar_cobro_directo(factura_id, medio, monto, usuario):
-    """Marca una factura como cobrada por efectivo o transferencia (sin liquidación)."""
-    ejecutar(
-        """INSERT INTO cobros_directos (factura_id, medio, monto, fecha, cargado_por) VALUES (?,?,?,?,?)
-           ON CONFLICT (factura_id) DO UPDATE SET medio=EXCLUDED.medio, monto=EXCLUDED.monto,
-           fecha=EXCLUDED.fecha, cargado_por=EXCLUDED.cargado_por""",
-        (int(factura_id), medio, float(monto), date.today().isoformat(), usuario),
-    )
-    registrar("Cobro directo", f"Factura #{factura_id} {medio} {fmt(monto)}")
-
-
-def cobro_directo_ui(usuario):
-    st.markdown("#### Marcar factura cobrada en efectivo o transferencia")
-    st.caption("Para facturas que no se cobraron con tarjeta. Quedan como pagadas en Contabilidad → Facturas impagas. Si se cobró en parte con tarjeta, cargá solo lo cobrado por este medio.")
-    pend = consultar(
-        """SELECT f.id, f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total FROM facturas f
-           WHERE f.id NOT IN (SELECT factura_id FROM cobros_directos)
-             AND f.id NOT IN (SELECT factura_id FROM liquidacion_factura)
-           ORDER BY f.fecha DESC"""
-    )
-    if pend.empty:
-        st.info("No hay facturas pendientes de marcar.")
-        return
-    etiq = {int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | Total {fmt(r.total)}" for r in pend.itertuples()}
-    total_de = {int(r.id): float(r.total) for r in pend.itertuples()}
-    with st.form("form_cobro_directo", clear_on_submit=True):
-        c1, c2, c3 = st.columns(3)
-        fid = c1.selectbox("Factura", list(etiq), format_func=lambda i: etiq[i])
-        medio = c2.selectbox("Medio de cobro", ["Efectivo", "Transferencia"])
-        monto = c3.number_input("Monto cobrado (0 = total de la factura)", min_value=0.0, step=100.0, format="%.2f")
-        if st.form_submit_button("Marcar como cobrada", type="primary"):
-            m = float(monto) if monto > 0 else total_de[fid]
-            marcar_cobro_directo(fid, medio, m, usuario)
-            st.success(f"Factura marcada como cobrada por {medio.lower()} ({fmt(m)}).")
-
-
 # ======================= 1. VENTAS =======================
 def vista_ventas():
     st.subheader("Importar facturas emitidas desde AFIP")
@@ -957,8 +922,6 @@ def vista_ventas():
             else:
                 guardar_venta_manual(f_v, cli.strip(), float(monto), usuario)
                 st.success(f"Venta manual cargada por {fmt(monto)}.")
-
-    cobro_directo_ui(usuario)
 
     st.markdown("#### Facturas cargadas")
     d, h = selector_rango("fact")
@@ -1056,11 +1019,12 @@ def vinculacion_manual(L, ver):
         (liq_id,),
     )
     usado_otras = {int(r.factura_id): float(r.imp) for r in otras.itertuples()}
+    cob_dir = {int(r.factura_id): float(r.m) for r in consultar("SELECT factura_id, COALESCE(SUM(monto),0) AS m FROM cobros_directos GROUP BY factura_id").itertuples()}
     facts = consultar(
         """SELECT id, fecha, tipo, punto_venta, numero, razon_social, total FROM facturas
            ORDER BY fecha DESC"""
     )
-    facts["saldo"] = [round(float(t) - usado_otras.get(int(i), 0.0), 2) for i, t in zip(facts.id, facts.total)]
+    facts["saldo"] = [round(float(t) - usado_otras.get(int(i), 0.0) - cob_dir.get(int(i), 0.0), 2) for i, t in zip(facts.id, facts.total)]
     facts = facts[facts.saldo > TOLERANCIA]
     actuales = consultar(
         """SELECT lf.factura_id, COALESCE(lf.monto, f.total) AS monto FROM liquidacion_factura lf
@@ -1129,6 +1093,50 @@ def vinculacion_manual(L, ver):
             st.rerun()
 
 
+def cobros_directos_ui():
+    st.markdown("#### Cobros directos (efectivo o transferencia)")
+    st.caption("Registrá la parte de una factura que se cobró sin tarjeta. Así no figura como impaga.")
+    facts = consultar("SELECT id, fecha, tipo, punto_venta, numero, razon_social, total FROM facturas ORDER BY fecha DESC")
+    if facts.empty:
+        st.info("No hay facturas cargadas.")
+        return
+    usado = {}
+    for r in consultar("SELECT lf.factura_id, COALESCE(lf.monto, f.total) AS m FROM liquidacion_factura lf JOIN facturas f ON f.id = lf.factura_id").itertuples():
+        usado[int(r.factura_id)] = usado.get(int(r.factura_id), 0.0) + float(r.m)
+    for r in consultar("SELECT factura_id, COALESCE(SUM(monto),0) AS m FROM cobros_directos GROUP BY factura_id").itertuples():
+        usado[int(r.factura_id)] = usado.get(int(r.factura_id), 0.0) + float(r.m)
+    etiquetas = {
+        int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | Total {fmt(r.total)}"
+        for r in facts.itertuples()
+    }
+    with st.form("form_cobro_directo", clear_on_submit=True):
+        c1, c2, c3, c4 = st.columns(4)
+        fid = c1.selectbox("Factura", list(etiquetas), format_func=lambda i: etiquetas[i], key="cd_fac")
+        medio = c2.selectbox("Medio", ["Efectivo", "Transferencia", "Otro"], key="cd_medio")
+        fecha_c = c3.date_input("Fecha del cobro", value=date.today(), key="cd_fecha")
+        monto = c4.number_input("Monto cobrado", min_value=0.0, step=100.0, format="%.2f", key="cd_monto")
+        if st.form_submit_button("Registrar cobro", type="primary"):
+            total = float(facts[facts.id == fid].iloc[0].total)
+            saldo = round(total - usado.get(int(fid), 0.0), 2)
+            if monto <= 0:
+                st.error("El monto debe ser mayor a cero.")
+            elif monto > saldo + TOLERANCIA:
+                st.error(f"El monto supera el saldo pendiente de la factura ({fmt(saldo)}).")
+            else:
+                ejecutar(
+                    "INSERT INTO cobros_directos (factura_id, medio, fecha, monto, cargado_por, fecha_carga) VALUES (?,?,?,?,?,?)",
+                    (int(fid), medio, fecha_c.isoformat(), round(float(monto), 2), usuario, ahora()),
+                )
+                registrar("Cobro directo", f"Factura #{int(fid)}: {medio} {fmt(monto)}")
+                st.success("Cobro registrado.")
+    cobros = consultar(
+        """SELECT c.id, c.fecha, c.medio, c.monto, f.tipo, f.punto_venta, f.numero, f.razon_social
+           FROM cobros_directos c JOIN facturas f ON f.id = c.factura_id ORDER BY c.fecha DESC, c.id DESC"""
+    )
+    if not cobros.empty:
+        st.dataframe(cobros.drop(columns=["id"]), hide_index=True)
+
+
 def liq_vinculacion():
     st.subheader("Vinculación de comprobantes")
     if "vinc_msg" in st.session_state:
@@ -1154,6 +1162,7 @@ def liq_vinculacion():
             st.info("Elegí una liquidación para ver su bruto y vincular facturas.")
         else:
             vinculacion_manual(opc[eleg], ver)
+    cobros_directos_ui()
     st.markdown("#### Comprobantes vinculados")
     vinc = consultar(
         """SELECT l.id AS liquidacion, l.plataforma, l.nro_lote, f.fecha, f.tipo,
@@ -1292,10 +1301,50 @@ def vista_extractos(sub):
         ext_conciliacion()
 
 
+# ======================= PDF DE REPORTES =======================
+def pdf_reporte(titulo, df):
+    from fpdf import FPDF
+
+    def txt_pdf(v):
+        if isinstance(v, float):
+            return "" if pd.isna(v) else fmt(v)
+        return str(v).replace("−", "-").encode("latin-1", "replace").decode("latin-1")
+
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 10, txt_pdf(titulo), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(0, 6, txt_pdf(f"Castillo de Oro - generado el {ahora()}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+    ancho = (297 - 24) / max(len(df.columns), 1)
+    pdf.set_font("Helvetica", "B", 8)
+    for c in df.columns:
+        pdf.cell(ancho, 7, txt_pdf(c)[:28], border=1)
+    pdf.ln()
+    pdf.set_font("Helvetica", "", 8)
+    for _, fila in df.iterrows():
+        for v in fila.tolist():
+            pdf.cell(ancho, 6, txt_pdf(v)[:32], border=1)
+        pdf.ln()
+    return bytes(pdf.output())
+
+
+def boton_pdf(titulo, df):
+    st.download_button(
+        "📄 Descargar en PDF",
+        data=pdf_reporte(titulo, df),
+        file_name=f"{titulo.replace(' ', '_')}.pdf",
+        mime="application/pdf",
+        key=f"pdf_{titulo}",
+    )
+
+
 # ======================= 3. CONTABILIDAD =======================
 def vista_contabilidad(nombre):
     st.markdown(f"## 📈 Contabilidad - {nombre}")
-    if nombre == "Facturas vs neto final":
+    if nombre == "Facturación vs. neto liquidado":
         d4, h4 = selector_rango("r1")
         r1 = consultar(
             """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, COALESCE(lf.monto, f.total) AS facturado,
@@ -1320,35 +1369,46 @@ def vista_contabilidad(nombre):
             m1.metric("Facturado", fmt(r1.facturado.sum()))
             m2.metric("Descuentos", fmt(r1.descuentos.sum()))
             m3.metric("Neto final", fmt(r1.neto_final.sum()))
-            st.dataframe(r1[["fecha", "factura", "razon_social", "plataforma", "facturado", "descuentos", "neto_final", "estado"]], hide_index=True)
+            tabla_r1 = r1[["fecha", "factura", "razon_social", "plataforma", "facturado", "descuentos", "neto_final", "estado"]]
+            st.dataframe(tabla_r1, hide_index=True)
+            boton_pdf("Facturación vs. neto liquidado", tabla_r1)
     elif nombre == "Facturas impagas":
         d5, h5 = selector_rango("r2")
         r2 = consultar(
             """SELECT f.id, f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total,
                       (SELECT COUNT(*) FROM liquidacion_factura lf WHERE lf.factura_id = f.id) AS vinc,
-                      (SELECT COUNT(*) FROM cobros_directos cd WHERE cd.factura_id = f.id) AS cobro_dir
+                      (SELECT COALESCE(SUM(COALESCE(lf.monto, f.total)),0) FROM liquidacion_factura lf WHERE lf.factura_id = f.id) AS cubierto_liq,
+                      (SELECT COALESCE(SUM(c.monto),0) FROM cobros_directos c WHERE c.factura_id = f.id) AS cobro_dir
                FROM facturas f WHERE f.fecha BETWEEN ? AND ? ORDER BY f.fecha""",
             (d5, h5),
         )
         if r2.empty:
             st.info("No hay facturas en el rango.")
         else:
-            impagas = r2[(r2.vinc == 0) & (r2.cobro_dir == 0)]
-            st.metric("Total impago", fmt(impagas.total.sum()))
+            r2["pendiente"] = (r2.total - r2.cubierto_liq - r2.cobro_dir).round(2)
+            st.metric("Total impago", fmt(r2[r2.pendiente > TOLERANCIA].pendiente.sum()))
             st.caption("Las facturas tachadas en rojo ya están vinculadas a una liquidación.")
             filas_html = []
             for r in r2.itertuples():
-                vinculada = int(r.vinc) > 0 or int(r.cobro_dir) > 0
+                vinculada = int(r.vinc) > 0
                 estilo = "text-decoration: line-through; color: red;" if vinculada else ""
-                celdas = [str(r.fecha), f"{r.tipo} {r.punto_venta}-{r.numero}", str(r.razon_social), fmt(r.total), "Sí" if int(r.vinc) > 0 else ("Cobrada otro medio" if int(r.cobro_dir) > 0 else "No")]
+                celdas = [str(r.fecha), f"{r.tipo} {r.punto_venta}-{r.numero}", str(r.razon_social), fmt(r.total), fmt(r.pendiente), "Sí" if vinculada else "No"]
                 tds = "".join(f"<td style='padding:4px 8px;border-bottom:1px solid #ddd;{estilo}'>{html_lib.escape(c)}</td>" for c in celdas)
                 filas_html.append(f"<tr>{tds}</tr>")
-            encabezado = "".join(f"<th style='padding:4px 8px;text-align:left;border-bottom:2px solid #999'>{h}</th>" for h in ["Fecha", "Comprobante", "Razón social", "Total", "Vinculada"])
+            encabezado = "".join(f"<th style='padding:4px 8px;text-align:left;border-bottom:2px solid #999'>{h}</th>" for h in ["Fecha", "Comprobante", "Razón social", "Total", "Saldo pendiente", "Vinculada"])
             st.markdown(
                 f"<table style='width:100%;border-collapse:collapse'><thead><tr>{encabezado}</tr></thead><tbody>{''.join(filas_html)}</tbody></table>",
                 unsafe_allow_html=True,
             )
-    elif nombre == "Impuestos para DDJJ":
+            boton_pdf("Facturas impagas", pd.DataFrame({
+                "Fecha": r2.fecha,
+                "Comprobante": r2.tipo + " " + r2.punto_venta.astype(str) + "-" + r2.numero.astype(str),
+                "Razón social": r2.razon_social,
+                "Total": r2.total,
+                "Saldo pendiente": r2.pendiente,
+                "Vinculada": (r2.vinc > 0).map({True: "Sí", False: "No"}),
+            }))
+    elif nombre == "Impuestos para declaración jurada":
         d6, h6 = selector_rango("r3")
         det = consultar(
             """SELECT l.id AS liquidacion, l.fecha_liquidacion, l.plataforma, li.impuesto, li.monto
@@ -1362,6 +1422,7 @@ def vista_contabilidad(nombre):
             st.metric("Total impuestos", fmt(det.monto.sum()))
             por_tipo = det.groupby("impuesto", as_index=False).monto.sum()
             st.dataframe(por_tipo, hide_index=True)
+            boton_pdf("Impuestos para declaración jurada", por_tipo)
             st.dataframe(det.pivot_table(index=["liquidacion", "fecha_liquidacion", "plataforma"],
                                          columns="impuesto", values="monto", aggfunc="sum", fill_value=0).reset_index(),
                          hide_index=True)
@@ -1376,7 +1437,9 @@ def vista_contabilidad(nombre):
             k1.metric("Bruto", fmt(liq.bruto.sum()))
             k2.metric("Deducciones", fmt(liq.deducciones.sum()))
             k3.metric("Neto acreditado", fmt(liq.neto_acreditado.sum()))
-            st.dataframe(liq.groupby("plataforma")[["bruto", "deducciones", "neto_acreditado"]].sum().reset_index(), hide_index=True)
+            res_pl = liq.groupby("plataforma")[["bruto", "deducciones", "neto_acreditado"]].sum().reset_index()
+            st.dataframe(res_pl, hide_index=True)
+            boton_pdf("Resumen de liquidaciones por plataforma", res_pl)
 
 
 if vista == "Carga de Registro de Ventas":
