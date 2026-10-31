@@ -413,9 +413,9 @@ def extraer_liquidacion_pdf(archivo):
         iva_b = firma_bna(lambda s: s.startswith("iva 21") or s.startswith("devolucion iva") or "iva gene" in s)
         datos["f_bruto"] = firma_bna(lambda s: s.startswith("total presentado"))
         datos["f_com"] = firma_bna(lambda s: re.match(r"(devolucion )?arancel", s) is not None)
-        datos["f_cf"] = firma_bna(lambda s: "cargo fin" in s and "iva" not in s)
+        datos["f_cf"] = round(firma_bna(lambda s: "cargo fin" in s and "iva" not in s) + bienes, 2)
         datos["f_iva"] = iva_b
-        datos["f_ret"] = round(bienes + sirtac_b, 2)
+        datos["f_ret"] = sirtac_b
         datos["f_desglose"] = {"IVA 21%": iva_b, "SIRTAC / IIBB": sirtac_b, "Bienes Durables": bienes}
         datos["f_neto"] = firma_bna(lambda s: "neto percibido" in s) or datos.get("f_neto")
         mf = re.search(r"Consumos Cuotas\s*(\d{2}/\d{2}/\d{4})", texto)
@@ -1220,6 +1220,7 @@ def liq_planilla():
     imp = consultar("SELECT liquidacion_id, impuesto, SUM(monto) AS monto FROM liquidacion_impuestos GROUP BY liquidacion_id, impuesto")
     imp_p = imp.pivot(index="liquidacion_id", columns="impuesto", values="monto").fillna(0) if not imp.empty else pd.DataFrame()
     peso = df.imp / df.tot_liq
+    bienes_s = (df.liq.map(imp_p["Bienes Durables"]) if (not imp_p.empty and "Bienes Durables" in imp_p) else 0) * peso
     out = pd.DataFrame({
         "FECHA FAC.": pd.to_datetime(df.fecha_fac).dt.strftime("%d/%m/%Y"),
         "COMPROBANTE": df.tipo + " " + df.punto_venta.astype(str) + "-" + df.numero.astype(str),
@@ -1229,7 +1230,8 @@ def liq_planilla():
         "LIQ. N°": df.lote,
         "PLATAFORMA": df.plataforma,
         "ARANCEL": df.comision * peso,
-        "INTERÉS / FINANCIACIÓN": df.costo_financiero * peso,
+        "INTERÉS / FINANCIACIÓN": (df.costo_financiero * peso) - bienes_s,
+        "BIENES DURABLES (sin IVA)": bienes_s,
     })
     for col in ["IVA 21%", "IVA 10,5%", "IVA 27%"]:
         out[col] = (df.liq.map(imp_p[col]) if (not imp_p.empty and col in imp_p) else 0) * peso
