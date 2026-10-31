@@ -413,9 +413,9 @@ def extraer_liquidacion_pdf(archivo):
         iva_b = firma_bna(lambda s: s.startswith("iva 21") or s.startswith("devolucion iva") or "iva gene" in s)
         datos["f_bruto"] = firma_bna(lambda s: s.startswith("total presentado"))
         datos["f_com"] = firma_bna(lambda s: re.match(r"(devolucion )?arancel", s) is not None)
-        datos["f_cf"] = round(firma_bna(lambda s: "cargo fin" in s and "iva" not in s) + bienes, 2)
+        datos["f_cf"] = firma_bna(lambda s: "cargo fin" in s and "iva" not in s)
         datos["f_iva"] = iva_b
-        datos["f_ret"] = sirtac_b
+        datos["f_ret"] = round(sirtac_b + bienes, 2)
         datos["f_desglose"] = {"IVA 21%": iva_b, "SIRTAC / IIBB": sirtac_b, "Bienes Durables": bienes}
         datos["f_neto"] = firma_bna(lambda s: "neto percibido" in s) or datos.get("f_neto")
         mf = re.search(r"Consumos Cuotas\s*(\d{2}/\d{2}/\d{4})", texto)
@@ -1230,7 +1230,7 @@ def liq_planilla():
         "LIQ. N°": df.lote,
         "PLATAFORMA": df.plataforma,
         "ARANCEL": df.comision * peso,
-        "INTERÉS / FINANCIACIÓN": (df.costo_financiero * peso) - bienes_s,
+        "INTERÉS / FINANCIACIÓN": df.costo_financiero.abs() * peso,
         "BIENES DURABLES (sin IVA)": bienes_s,
     })
     for col in ["IVA 21%", "IVA 10,5%", "IVA 27%"]:
