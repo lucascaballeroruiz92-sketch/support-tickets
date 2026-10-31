@@ -1302,7 +1302,7 @@ def vista_extractos(sub):
 
 
 # ======================= PDF DE REPORTES =======================
-def pdf_reporte(titulo, df):
+def pdf_reporte(titulo, df, extra=None):
     from fpdf import FPDF
 
     def txt_pdf(v):
@@ -1318,23 +1318,29 @@ def pdf_reporte(titulo, df):
     pdf.set_font("Helvetica", "", 9)
     pdf.cell(0, 6, txt_pdf(f"Castillo de Oro - generado el {ahora()}"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(3)
-    ancho = (297 - 24) / max(len(df.columns), 1)
-    pdf.set_font("Helvetica", "B", 8)
-    for c in df.columns:
-        pdf.cell(ancho, 7, txt_pdf(c)[:28], border=1)
-    pdf.ln()
-    pdf.set_font("Helvetica", "", 8)
-    for _, fila in df.iterrows():
-        for v in fila.tolist():
-            pdf.cell(ancho, 6, txt_pdf(v)[:32], border=1)
+    secciones = [(None, df)] + list(extra or [])
+    for subtitulo, d in secciones:
+        if subtitulo:
+            pdf.ln(4)
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.cell(0, 8, txt_pdf(subtitulo), new_x="LMARGIN", new_y="NEXT")
+        ancho = (297 - 24) / max(len(d.columns), 1)
+        pdf.set_font("Helvetica", "B", 8)
+        for c in d.columns:
+            pdf.cell(ancho, 7, txt_pdf(c)[:28], border=1)
         pdf.ln()
+        pdf.set_font("Helvetica", "", 8)
+        for _, fila in d.iterrows():
+            for v in fila.tolist():
+                pdf.cell(ancho, 6, txt_pdf(v)[:32], border=1)
+            pdf.ln()
     return bytes(pdf.output())
 
 
-def boton_pdf(titulo, df):
+def boton_pdf(titulo, df, extra=None):
     st.download_button(
         "📄 Descargar en PDF",
-        data=pdf_reporte(titulo, df),
+        data=pdf_reporte(titulo, df, extra),
         file_name=f"{titulo.replace(' ', '_')}.pdf",
         mime="application/pdf",
         key=f"pdf_{titulo}",
@@ -1421,11 +1427,14 @@ def vista_contabilidad(nombre):
         else:
             st.metric("Total impuestos", fmt(det.monto.sum()))
             por_tipo = det.groupby("impuesto", as_index=False).monto.sum()
+            st.markdown("#### Resumen por tipo de impuesto")
             st.dataframe(por_tipo, hide_index=True)
-            boton_pdf("Impuestos para declaración jurada", por_tipo)
-            st.dataframe(det.pivot_table(index=["liquidacion", "fecha_liquidacion", "plataforma"],
-                                         columns="impuesto", values="monto", aggfunc="sum", fill_value=0).reset_index(),
-                         hide_index=True)
+            st.markdown("#### Detalle de impuestos por liquidación")
+            detalle_liq = det.pivot_table(index=["liquidacion", "fecha_liquidacion", "plataforma"],
+                                          columns="impuesto", values="monto", aggfunc="sum", fill_value=0).reset_index()
+            detalle_liq = detalle_liq.rename(columns={"liquidacion": "Liquidación #", "fecha_liquidacion": "Fecha", "plataforma": "Plataforma"})
+            st.dataframe(detalle_liq, hide_index=True)
+            boton_pdf("Impuestos para declaración jurada", por_tipo, [("Detalle de impuestos por liquidación", detalle_liq)])
     else:
         d3, h3 = selector_rango("inf")
         liq = consultar("SELECT * FROM liquidaciones WHERE fecha_liquidacion BETWEEN ? AND ?", (d3, h3))
