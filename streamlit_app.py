@@ -995,6 +995,25 @@ def vista_ventas():
     st.caption(f"{len(facturas)} facturas en el rango | Total: {fmt(facturas.total.sum())}")
     st.dataframe(facturas, hide_index=True)
 
+    st.markdown("#### Eliminar comprobante")
+    st.caption("Borra una factura o venta manual. Si está vinculada a una liquidación, primero hay que desvincularla desde Tesorería.")
+    todas_f = consultar("SELECT id, fecha, tipo, punto_venta, numero, razon_social, total FROM facturas ORDER BY fecha DESC, id DESC")
+    if todas_f.empty:
+        st.info("No hay comprobantes cargados.")
+    else:
+        ops_f = {f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | {fmt(r.total)}": int(r.id) for r in todas_f.itertuples()}
+        el_f = st.selectbox("Comprobante a eliminar", list(ops_f), key="del_fac_sel")
+        fid_d = ops_f[el_f]
+        vinc_f = int(consultar("SELECT COUNT(*) AS n FROM liquidacion_factura WHERE factura_id=?", (fid_d,)).n.iloc[0])
+        if vinc_f > 0:
+            st.warning("No se puede eliminar: está vinculado a una liquidación. Desvinculala primero.")
+        elif st.button("🗑️ Eliminar comprobante", key="btn_del_fac"):
+            ejecutar("DELETE FROM cobros_directos WHERE factura_id=?", (fid_d,))
+            ejecutar("DELETE FROM facturas WHERE id=?", (fid_d,))
+            registrar("Comprobante eliminado", f"Factura #{fid_d} {el_f}")
+            st.success("Comprobante eliminado.")
+            st.rerun()
+
 
 # ======================= 2. TESORERÍA: LIQUIDACIONES =======================
 def liq_carga():
@@ -1057,6 +1076,20 @@ def liq_carga():
         n = borrar_todas_liquidaciones(usuario)
         st.success(f"Se borraron {n} liquidaciones.")
         st.rerun()
+
+    st.markdown("#### Eliminar liquidación")
+    st.caption("Solo se puede eliminar una liquidación sin comprobantes vinculados.")
+    todas_c = consultar("SELECT id, plataforma, nro_lote, fecha_liquidacion FROM liquidaciones ORDER BY fecha_liquidacion DESC, id DESC")
+    if not todas_c.empty:
+        ops_c = {f"#{int(r.id)} - {r.plataforma} - {r.nro_lote or 's/lote'} - {r.fecha_liquidacion}": int(r.id) for r in todas_c.itertuples()}
+        el_c = st.selectbox("Liquidación a eliminar", list(ops_c), key="carga_del_sel")
+        if st.button("Eliminar liquidación", key="carga_del_btn"):
+            ok, msg = eliminar_liquidacion(ops_c[el_c], usuario)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
 
 
 def guardar_vinculacion_manual(liq_id, imputaciones, usuario):
@@ -1237,6 +1270,20 @@ def liq_vinculacion():
            ORDER BY l.id, f.fecha"""
     )
     st.dataframe(vinc, hide_index=True)
+
+    st.markdown("#### Desvincular liquidación")
+    st.caption("Quita todas las facturas vinculadas a una liquidación para que vuelva a aparecer como pendiente.")
+    con_vinc = consultar("SELECT DISTINCT l.id, l.plataforma, l.nro_lote, l.fecha_liquidacion FROM liquidaciones l JOIN liquidacion_factura lf ON lf.liquidacion_id = l.id ORDER BY l.id DESC")
+    if con_vinc.empty:
+        st.info("No hay liquidaciones con comprobantes vinculados.")
+    else:
+        ops_d = {f"#{int(r.id)} - {r.plataforma} - {r.nro_lote or 's/lote'} - {r.fecha_liquidacion}": int(r.id) for r in con_vinc.itertuples()}
+        el_d = st.selectbox("Liquidación a desvincular", list(ops_d), key="desv_sel")
+        if st.button("Desvincular liquidación", key="desv_btn"):
+            ejecutar("DELETE FROM liquidacion_factura WHERE liquidacion_id=?", (ops_d[el_d],))
+            registrar("Desvinculación", f"Liquidación #{ops_d[el_d]}")
+            st.session_state["vinc_msg"] = f"Liquidación #{ops_d[el_d]} desvinculada."
+            st.rerun()
 
     st.markdown("#### Eliminar liquidación")
     st.caption("Solo se pueden eliminar liquidaciones que no tengan comprobantes vinculados.")
