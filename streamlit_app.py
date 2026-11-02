@@ -442,6 +442,45 @@ def extraer_liquidacion_pdf(archivo):
         if ml:
             datos["f_lote"] = ml[1]
 
+    # Mercado Pago: comisión y costo financiero llevan IVA 21% incluido
+    if "mercado pago" in tl and ("cargo de mercado pago" in tl or "recargo de mercado pago" in tl or "total recibido" in tl):
+        def mp_monto(t):
+            return float(t.replace(".", "").replace(",", "."))
+
+        def mp_linea(patron):
+            for l in lineas:
+                if re.search(patron, sin_acentos(l)):
+                    m_ = re.findall(r"\$\s?(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)", l)
+                    if m_:
+                        return mp_monto(m_[-1])
+            return 0.0
+
+        cobro_mp = mp_linea(r"^cobro")
+        sirtac_mp = mp_linea(r"sirtac")
+        cf_tot = mp_linea(r"^intereses por cuotas")
+        com_tot = mp_linea(r"^(cargo|recargo) de mercado pago")
+        neto_mp = mp_linea(r"^total recibido")
+        com_n = round(com_tot / 1.21, 2)
+        cf_n = round(cf_tot / 1.21, 2)
+        iva_mp = round((com_tot - com_n) + (cf_tot - cf_n), 2)
+        datos["f_bruto"] = cobro_mp
+        datos["f_com"] = com_n
+        datos["f_cf"] = cf_n
+        datos["f_iva"] = iva_mp
+        datos["f_ret"] = round(sirtac_mp, 2)
+        datos["f_desglose"] = {"IVA 21%": iva_mp, "SIRTAC / IIBB": sirtac_mp}
+        datos["f_neto"] = neto_mp
+        datos["f_plat"] = "Mercado Pago"
+        # Número de liquidación = N.° de movimiento
+        mm = re.search(r"de movimiento\s+([A-Za-z0-9]{8,})", texto, re.I)
+        if mm:
+            datos["f_lote"] = mm[1]
+        # Fecha de liquidación = fecha de emisión de la página (margen superior izquierdo, ej. 2/11/26, 17:09)
+        mf = re.search(r"(\d{1,2})/(\d{1,2})/(\d{2})\b,?\s*\d{1,2}:\d{2}", texto)
+        if mf:
+            datos["f_fliq"] = date(2000 + int(mf[3]), int(mf[2]), int(mf[1]))
+        datos["f_filas"] = [{"fecha": datos["f_fliq"], "monto": cobro_mp}] if "f_fliq" in datos else []
+
     if "f_bruto" in datos:
         deducc = round(datos["f_com"] + datos["f_cf"] + datos["f_iva"] + datos["f_ret"], 2)
         neto_calc = round(datos["f_bruto"] - deducc, 2)
