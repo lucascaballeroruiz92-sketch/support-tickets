@@ -107,7 +107,7 @@ def get_engine():
 
 
 def _sql(sql):
-    """Las consultas se escriben con '?'; psycopg usa '%s'."""
+    """Las consultas se escriben con '?'; psycopg2 usa '%s'."""
     return sql.replace("?", "%s")
 
 
@@ -118,7 +118,7 @@ def init_db():
                 con.exec_driver_sql(sentencia)
         con.exec_driver_sql("ALTER TABLE liquidacion_factura ADD COLUMN IF NOT EXISTS monto DOUBLE PRECISION")
         # Asegura las columnas de cobros_directos si la tabla se creó con otro esquema
-        for col, tipo in [("factura_id", "INTEGER"), ("medio", "TEXT"), ("fecha", "TEXT"),
+        for col, tipo in [("id", "SERIAL"), ("factura_id", "INTEGER"), ("medio", "TEXT"), ("fecha", "TEXT"),
                           ("monto", "DOUBLE PRECISION"), ("cargado_por", "TEXT"), ("fecha_carga", "TEXT")]:
             con.exec_driver_sql(f"ALTER TABLE cobros_directos ADD COLUMN IF NOT EXISTS {col} {tipo}")
 
@@ -1137,7 +1137,7 @@ def cobros_directos_ui():
         """SELECT c.fecha AS "Fecha", c.medio AS "Medio", c.monto AS "Monto",
                   f.tipo AS "Tipo", f.punto_venta AS "PV", f.numero AS "Número", f.razon_social AS "Razón social"
            FROM cobros_directos c JOIN facturas f ON f.id = c.factura_id
-           ORDER BY c.fecha DESC, c.id DESC"""
+           ORDER BY c.fecha DESC"""
     )
     if not cobros.empty:
         st.dataframe(cobros, hide_index=True)
