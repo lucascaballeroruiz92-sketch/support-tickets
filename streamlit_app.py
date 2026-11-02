@@ -443,7 +443,7 @@ def extraer_liquidacion_pdf(archivo):
             datos["f_lote"] = ml[1]
 
     # Mercado Pago: comisión y costo financiero llevan IVA 21% incluido
-    if "mercado pago" in tl and ("cargo de mercado pago" in tl or "recargo de mercado pago" in tl or "total recibido" in tl):
+    if ("mercado pago" in tl or "mercadopago" in tl.replace(" ", "")) and ("cargo de mercado pago" in tl or "recargo de mercado pago" in tl or "total recibido" in tl or "total de la operacion" in tl):
         def mp_monto(t):
             return float(t.replace(".", "").replace(",", "."))
 
@@ -456,10 +456,10 @@ def extraer_liquidacion_pdf(archivo):
             return 0.0
 
         cobro_mp = mp_linea(r"^cobro")
-        sirtac_mp = mp_linea(r"sirtac")
+        sirtac_mp = mp_linea(r"sirtac|sircupa|ingresos brutos")
         cf_tot = mp_linea(r"^intereses por cuotas")
         com_tot = mp_linea(r"^(cargo|recargo) de mercado pago")
-        neto_mp = mp_linea(r"^total recibido")
+        neto_mp = mp_linea(r"^total recibido") or mp_linea(r"^total de la operacion")
         com_n = round(com_tot / 1.21, 2)
         cf_n = round(cf_tot / 1.21, 2)
         iva_mp = round((com_tot - com_n) + (cf_tot - cf_n), 2)
@@ -472,13 +472,19 @@ def extraer_liquidacion_pdf(archivo):
         datos["f_neto"] = neto_mp
         datos["f_plat"] = "Mercado Pago"
         # Número de liquidación = N.° de movimiento
-        mm = re.search(r"de movimiento\s+([A-Za-z0-9]{8,})", texto, re.I)
+        mm = re.search(r"movimiento\s+([A-Za-z0-9]{10,})", texto, re.I)
         if mm:
             datos["f_lote"] = mm[1]
-        # Fecha de liquidación = fecha de emisión de la página (margen superior izquierdo, ej. 2/11/26, 17:09)
-        mf = re.search(r"(\d{1,2})/(\d{1,2})/(\d{2})\b,?\s*\d{1,2}:\d{2}", texto)
-        if mf:
-            datos["f_fliq"] = date(2000 + int(mf[3]), int(mf[2]), int(mf[1]))
+        # Fecha de liquidación = fecha de acreditación ("Total recibido el 2/oct"). Año: margen superior (2/11/26, 17:09)
+        MESES = {"ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6,
+                 "jul": 7, "ago": 8, "sep": 9, "oct": 10, "nov": 11, "dic": 12}
+        ma = re.search(r"total recibido el\s*(\d{1,2})/([a-z]{3})", sin_acentos(texto)) or re.search(r"(?m)^(\d{1,2})/([a-z]{3})\s", sin_acentos(texto))
+        mg = re.search(r"(\d{1,2})/(\d{1,2})/(\d{2})\b,?\s*\d{1,2}:\d{2}", texto)
+        anio = 2000 + int(mg[3]) if mg else date.today().year
+        if ma and ma[2] in MESES:
+            datos["f_fliq"] = date(anio, MESES[ma[2]], int(ma[1]))
+        elif mg:
+            datos["f_fliq"] = date(anio, int(mg[2]), int(mg[1]))
         datos["f_filas"] = [{"fecha": datos["f_fliq"], "monto": cobro_mp}] if "f_fliq" in datos else []
 
     if "f_bruto" in datos:
