@@ -369,11 +369,24 @@ def extraer_liquidacion_pdf(archivo):
     if neto is not None:
         datos["f_neto"] = abs(neto)
 
-    m = re.search(r"Fecha de Emisi\w*\s*:?\s*(\d{2}/\d{2}/\d{4})", texto, re.I) or re.search(r"Fecha de Pago\s*:?\s*(\d{2}/\d{2}/\d{4})", texto, re.I)
-    fs = m.group(1) if m else None
+    # Fecha de liquidación = Fecha de Emisión (fecha en que se liquida el IVA). Nunca Fecha de Pago.
+    fs = None
+    for i, l in enumerate(lineas):
+        if "fecha de emision" in sin_acentos(l):
+            cand = FECHA_RE.search(l) or (FECHA_RE.search(lineas[i + 1]) if i + 1 < len(lineas) else None)
+            if cand:
+                fs = cand.group(0)
+                break
     if not fs:
-        m = FECHA_RE.search(texto)
-        fs = m.group(0) if m else None
+        # Nunca usar la fecha de pago: distorsiona el IVA. Se toma la primera fecha que no sea de pago.
+        for l in lineas:
+            if "pago" not in sin_acentos(l):
+                m = FECHA_RE.search(l)
+                if m:
+                    fs = m.group(0)
+                    break
+    if not fs:
+        avisos.append("No se encontró la fecha de emisión en el PDF. Revisar la fecha de liquidación.")
     if fs:
         try:
             d_, mo_, a_ = re.split(r"[/.-]", fs)
