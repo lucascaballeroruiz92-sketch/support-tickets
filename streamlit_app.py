@@ -1055,6 +1055,19 @@ def liq_carga():
     if st.session_state.pop("carga_rerun", False):
         st.rerun()
 
+    st.markdown("#### CSV de Mercado Pago (una liquidación por operación)")
+    st.caption("Subí el reporte de transacciones en CSV. Se crea una liquidación por cada cobro (SOURCE_ID).")
+    csv_mp = st.file_uploader("CSV de Mercado Pago", type=["csv", "txt"], key=f"up_csv_mp_{ver}")
+    if csv_mp is not None and st.button("Cargar CSV", type="primary", key=f"btn_csv_mp_{ver}"):
+        try:
+            c_, o_ = cargar_csv_mercadopago(csv_mp, usuario)
+            st.session_state["carga_ver"] = ver + 1
+            st.session_state["carga_msg"] = f"CSV procesado: {c_} liquidaciones creadas, {o_} ya existentes."
+            st.session_state["carga_rerun"] = True
+        except Exception as e:
+            st.error(f"No se pudo procesar el CSV: {e}")
+            st.code(traceback.format_exc())
+
     st.markdown("#### Liquidaciones cargadas")
     d2, h2 = selector_rango("liq")
     liqs = consultar(
@@ -1090,6 +1103,79 @@ def liq_carga():
                 st.rerun()
             else:
                 st.error(msg)
+
+
+def _num_csv(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return 0.0
+    s = str(v).strip().replace("$", "").replace(" ", "")
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _fecha_csv(v):
+    s = str(v or "").strip()[:10]
+    for fmt_ in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt_).date()
+        except ValueError:
+            continue
+    return None
+
+
+def cargar_csv_mercadopago(archivo, usuario):
+    """Una liquidación por operación de cobro (SOURCE_ID). Omite pagos que salen de la cuenta y duplicados."""
+    archivo.seek(0)
+    df = pd.read_csv(archivo, dtype=str, sep=None, engine="python")
+    df.columns = [str(c).strip() for c in df.columns]
+    creadas, omitidas = 0, 0
+    for _, r in df.iterrows():
+        sid = str(r.get("SOURCE_ID", "") or "").strip()
+        bruto = _num_csv(r.get("TRANSACTION_AMOUNT"))
+        metodo = str(r.get("PAYMENT_METHOD_TYPE", "") or "").strip()
+        if not sid or sid.lower() == "nan" or bruto <= 0 or metodo == "available_money":
+            continue
+        if not consultar("SELECT id FROM liquidaciones WHERE nro_lote=?", (sid,)).empty:
+            omitidas += 1
+            continue
+        com = abs(_num_csv(r.get("MKP_FEE_AMOUNT")))
+        cf = abs(_num_csv(r.get("FINANCING_FEE_AMOUNT")))
+        ret = abs(_num_csv(r.get("TAXES_AMOUNT")))
+        com_n = round(com / 1.21, 2)
+        cf_n = round(cf / 1.21, 2)
+        iva = round((com - com_n) + (cf - cf_n), 2)
+        neto_inf = _num_csv(r.get("SETTLEMENT_NET_AMOUNT"))
+        neto_calc = round(bruto - com_n - cf_n - iva - ret, 2)
+        neto = neto_inf if neto_inf else neto_calc
+        fl = _fecha_csv(r.get("SETTLEMENT_DATE")) or date.today()
+        esperado, _, estado = calcular(bruto, com_n, cf_n, iva, ret, None, None)
+        liq_id = ejecutar_id(
+            """INSERT INTO liquidaciones
+               (plataforma, banco, nro_lote, fecha_liquidacion, periodo_desde, periodo_hasta,
+                bruto, comision, costo_financiero, iva_comision, retenciones,
+                neto_esperado, neto_acreditado, fecha_acreditacion, diferencia, estado, notas,
+                cargado_por, fecha_carga, ultima_modif_por, ultima_modif)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("Mercado Pago", "", sid, fl.isoformat(), fl.isoformat(), fl.isoformat(),
+             bruto, com_n, cf_n, iva, ret, esperado, None, None, None, estado,
+             "Cargado desde CSV de Mercado Pago.", usuario, ahora(), usuario, ahora()),
+        )
+        ejecutar("INSERT INTO liquidacion_pdf (liquidacion_id, neto_pdf) VALUES (?,?)", (liq_id, neto))
+        if ret:
+            ejecutar("INSERT INTO liquidacion_impuestos (liquidacion_id, impuesto, monto) VALUES (?,?,?)",
+                     (liq_id, "SIRTAC / IIBB", ret))
+        if iva:
+            ejecutar("INSERT INTO liquidacion_impuestos (liquidacion_id, impuesto, monto) VALUES (?,?,?)",
+                     (liq_id, "IVA 21%", iva))
+        ejecutar("INSERT INTO liquidacion_filas (liquidacion_id, fecha, monto) VALUES (?,?,?)",
+                 (liq_id, fl.isoformat(), bruto))
+        creadas += 1
+    registrar("Carga CSV Mercado Pago", f"{creadas} liquidaciones creadas, {omitidas} ya existentes")
+    return creadas, omitidas
 
 
 def guardar_vinculacion_manual(liq_id, imputaciones, usuario):
