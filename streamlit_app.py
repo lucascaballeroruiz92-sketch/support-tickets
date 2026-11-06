@@ -487,6 +487,29 @@ def extraer_liquidacion_pdf(archivo):
             datos["f_fliq"] = date(anio, int(mg[2]), int(mg[1]))
         datos["f_filas"] = [{"fecha": datos["f_fliq"], "monto": cobro_mp}] if "f_fliq" in datos else []
 
+    # Resumen Diario de Liquidaciones - Banco Credicoop. La percepción de IVA NO es IVA crédito.
+    if "resumen diario de liquidaciones" in tl:
+        def cred(patron):
+            m_ = re.search(patron, texto, re.I)
+            return num(m_[1]) if m_ else 0.0
+
+        bruto_c = cred(r"\d+\s+Venta Tj\.?\s*D[eé]bito\s*\$\s*([\d.]+,\d{2})")
+        iva_c = cred(r"IVA\s+21[.,]00\s?%\s*\$\s*([\d.]+,\d{2})")
+        perc_c = cred(r"IVA\s+RG\s*\d+\s+\d+[.,]\d+\s?%\s*\$\s*([\d.]+,\d{2})")
+        sirtac_c = cred(r"SIRTAC[\s\S]{0,30}?\$\s*([\d.]+,\d{2})")
+        datos["f_bruto"] = bruto_c
+        datos["f_com"] = cred(r"Arancel Tj\.?\s*D[eé]bito[\s\S]{0,40}?\$\s*([\d.]+,\d{2})")
+        datos["f_cf"] = 0.0
+        datos["f_iva"] = iva_c
+        datos["f_ret"] = round(perc_c + sirtac_c, 2)
+        datos["f_desglose"] = {"IVA 21%": iva_c, "Percepciones": perc_c, "SIRTAC / IIBB": sirtac_c}
+        datos["f_neto"] = cred(r"SE ACREDITO EN:[\s\S]*?\$\s*([\d.]+,\d{2})") or None
+        datos["f_plat"] = "Banco Credicoop"
+        datos["f_filas"] = [{"fecha": datos["f_fliq"], "monto": bruto_c}] if "f_fliq" in datos else []
+        m_l = re.search(r"Liq\.\s*N[°º]\s*(\d+)", texto)
+        if m_l:
+            datos["f_lote"] = m_l[1]
+
     if "f_bruto" in datos:
         deducc = round(datos["f_com"] + datos["f_cf"] + datos["f_iva"] + datos["f_ret"], 2)
         neto_calc = round(datos["f_bruto"] - deducc, 2)
