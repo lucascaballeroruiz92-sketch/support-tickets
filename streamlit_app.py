@@ -502,7 +502,9 @@ def extraer_liquidacion_pdf(archivo):
         datos["f_cf"] = 0.0
         datos["f_iva"] = iva_c
         datos["f_ret"] = round(perc_c + sirtac_c, 2)
-        datos["f_desglose"] = {"IVA 21%": iva_c, "Percepciones": perc_c, "SIRTAC / IIBB": sirtac_c}
+        pm_c = re.search(r"IVA\s+RG\s*\d+\s+(\d+[.,]\d+)\s?%", texto)
+        pct_c = pm_c[1].replace(".", ",") if pm_c else "3,00"
+        datos["f_desglose"] = {"IVA 21%": iva_c, f"Percepción IVA RG 2408 ({pct_c}%)": perc_c, "SIRTAC / IIBB": sirtac_c}
         datos["f_neto"] = cred(r"SE ACREDITO EN:[\s\S]*?\$\s*([\d.]+,\d{2})") or None
         datos["f_plat"] = "Banco Credicoop"
         datos["f_filas"] = [{"fecha": datos["f_fliq"], "monto": bruto_c}] if "f_fliq" in datos else []
@@ -1455,7 +1457,9 @@ def liq_planilla():
     })
     for col in ["IVA 21%", "IVA 10,5%", "IVA 27%"]:
         out[col] = (df.liq.map(imp_p[col]) if (not imp_p.empty and col in imp_p) else 0) * peso
-    for col, etiqueta in [("Percepciones", "PERCEPCIONES"), ("SIRTAC / IIBB", "SIRTAC / IIBB"),
+    perc_cols = [c for c in imp_p.columns if str(c).startswith("Percepci")] if not imp_p.empty else []
+    out["PERCEPCIONES"] = (df.liq.map(imp_p[perc_cols].sum(axis=1)) if perc_cols else 0) * peso
+    for col, etiqueta in [("SIRTAC / IIBB", "SIRTAC / IIBB"),
                           ("Impuesto débitos y créditos", "DÉB. Y CRÉD.")]:
         out[etiqueta] = (df.liq.map(imp_p[col]) if (not imp_p.empty and col in imp_p) else 0) * peso
     out["TOTAL DEDUCCIONES"] = (df.comision + df.costo_financiero + df.iva_comision + df.retenciones) * peso
@@ -1641,22 +1645,32 @@ def vista_contabilidad(nombre):
         det = consultar(
             """SELECT l.id AS liquidacion, l.fecha_liquidacion, l.plataforma, li.impuesto, li.monto
                FROM liquidacion_impuestos li JOIN liquidaciones l ON l.id = li.liquidacion_id
-               WHERE l.fecha_liquidacion BETWEEN ? AND ? ORDER BY l.fecha_liquidacion""",
+               WHERE l.fecha_liquidacion BETWEEN ? AND ? AND li.impuesto <> 'Bienes Durables'
+               ORDER BY l.fecha_liquidacion""",
             (d6, h6),
         )
         if det.empty:
             st.info("No hay impuestos desglosados en el rango.")
         else:
             st.metric("Total impuestos", fmt(det.monto.sum()))
-            por_tipo = det.groupby("impuesto", as_index=False).monto.sum()
-            st.markdown("#### Resumen por tipo de impuesto")
-            st.dataframe(por_tipo, hide_index=True)
-            st.markdown("#### Detalle de impuestos por liquidación")
-            detalle_liq = det.pivot_table(index=["liquidacion", "fecha_liquidacion", "plataforma"],
-                                          columns="impuesto", values="monto", aggfunc="sum", fill_value=0).reset_index()
-            detalle_liq = detalle_liq.rename(columns={"liquidacion": "Liquidación #", "fecha_liquidacion": "Fecha", "plataforma": "Plataforma"})
-            st.dataframe(detalle_liq, hide_index=True)
-            boton_pdf("Impuestos para declaración jurada", por_tipo, [("Detalle de impuestos por liquidación", detalle_liq)])
+            det["periodo"] = pd.to_datetime(det.fecha_liquidacion).dt.strftime("%Y-%m")
+            secciones_pdf = []
+            for per in sorted(det.periodo.unique()):
+                dp = det[det.periodo == per]
+                st.markdown(f"### Período {per}")
+                st.metric(f"Total impuestos {per}", fmt(dp.monto.sum()))
+                for plat in sorted(dp.plataforma.unique()):
+                    dpp = dp[dp.plataforma == plat]
+                    st.markdown(f"**{plat}**")
+                    tipo_p = dpp.groupby("impuesto", as_index=False).monto.sum()
+                    st.dataframe(tipo_p, hide_index=True)
+                    det_p = dpp.pivot_table(index=["liquidacion", "fecha_liquidacion"],
+                                            columns="impuesto", values="monto", aggfunc="sum", fill_value=0).reset_index()
+                    det_p = det_p.rename(columns={"liquidacion": "Liquidación #", "fecha_liquidacion": "Fecha"})
+                    st.dataframe(det_p, hide_index=True)
+                    secciones_pdf.append((f"{per} - {plat} - Resumen", tipo_p))
+                    secciones_pdf.append((f"{per} - {plat} - Detalle por liquidación", det_p))
+            boton_pdf("Impuestos para declaración jurada", secciones_pdf[0][1], secciones_pdf[1:])
     else:
         d3, h3 = selector_rango("inf")
         liq = consultar("SELECT * FROM liquidaciones WHERE fecha_liquidacion BETWEEN ? AND ?", (d3, h3))
