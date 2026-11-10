@@ -1642,35 +1642,38 @@ def vista_contabilidad(nombre):
             }))
     elif nombre == "Impuestos para declaración jurada":
         d6, h6 = selector_rango("r3")
-        det = consultar(
-            """SELECT l.id AS liquidacion, l.fecha_liquidacion, l.plataforma, li.impuesto, li.monto
-               FROM liquidacion_impuestos li JOIN liquidaciones l ON l.id = li.liquidacion_id
+        plats = consultar(
+            """SELECT DISTINCT l.plataforma FROM liquidacion_impuestos li JOIN liquidaciones l ON l.id = li.liquidacion_id
                WHERE l.fecha_liquidacion BETWEEN ? AND ? AND li.impuesto <> 'Bienes Durables'
-               ORDER BY l.fecha_liquidacion""",
+               ORDER BY l.plataforma""",
             (d6, h6),
         )
-        if det.empty:
+        if plats.empty:
             st.info("No hay impuestos desglosados en el rango.")
         else:
-            st.metric("Total impuestos", fmt(det.monto.sum()))
-            det["periodo"] = pd.to_datetime(det.fecha_liquidacion).dt.strftime("%Y-%m")
-            secciones_pdf = []
-            for per in sorted(det.periodo.unique()):
-                dp = det[det.periodo == per]
-                st.markdown(f"### Período {per}")
-                st.metric(f"Total impuestos {per}", fmt(dp.monto.sum()))
-                for plat in sorted(dp.plataforma.unique()):
-                    dpp = dp[dp.plataforma == plat]
-                    st.markdown(f"**{plat}**")
-                    tipo_p = dpp.groupby("impuesto", as_index=False).monto.sum()
-                    st.dataframe(tipo_p, hide_index=True)
-                    det_p = dpp.pivot_table(index=["liquidacion", "fecha_liquidacion"],
-                                            columns="impuesto", values="monto", aggfunc="sum", fill_value=0).reset_index()
-                    det_p = det_p.rename(columns={"liquidacion": "Liquidación #", "fecha_liquidacion": "Fecha"})
-                    st.dataframe(det_p, hide_index=True)
-                    secciones_pdf.append((f"{per} - {plat} - Resumen", tipo_p))
-                    secciones_pdf.append((f"{per} - {plat} - Detalle por liquidación", det_p))
-            boton_pdf("Impuestos para declaración jurada", secciones_pdf[0][1], secciones_pdf[1:])
+            plat = st.selectbox("Plataforma", list(plats.plataforma), key="r3_plat")
+            det = consultar(
+                """SELECT l.id AS liquidacion, l.fecha_liquidacion, li.impuesto, li.monto
+                   FROM liquidacion_impuestos li JOIN liquidaciones l ON l.id = li.liquidacion_id
+                   WHERE l.fecha_liquidacion BETWEEN ? AND ? AND l.plataforma = ?
+                     AND li.impuesto <> 'Bienes Durables'
+                   ORDER BY l.fecha_liquidacion""",
+                (d6, h6, plat),
+            )
+            if det.empty:
+                st.info("No hay impuestos para esta plataforma en el rango.")
+            else:
+                det["Período"] = pd.to_datetime(det.fecha_liquidacion).dt.strftime("%Y-%m")
+                st.metric(f"Total impuestos - {plat}", fmt(det.monto.sum()))
+                tipo_p = det.groupby("impuesto", as_index=False).monto.sum()
+                st.markdown("#### Resumen por tipo de impuesto")
+                st.dataframe(tipo_p, hide_index=True)
+                det_p = det.pivot_table(index=["Período", "liquidacion", "fecha_liquidacion"],
+                                        columns="impuesto", values="monto", aggfunc="sum", fill_value=0).reset_index()
+                det_p = det_p.rename(columns={"liquidacion": "Liquidación #", "fecha_liquidacion": "Fecha"})
+                st.markdown("#### Detalle por liquidación")
+                st.dataframe(det_p, hide_index=True)
+                boton_pdf(f"Impuestos para declaración jurada - {plat}", tipo_p, [("Detalle por liquidación", det_p)])
     else:
         d3, h3 = selector_rango("inf")
         liq = consultar("SELECT * FROM liquidaciones WHERE fecha_liquidacion BETWEEN ? AND ?", (d3, h3))
