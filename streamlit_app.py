@@ -235,7 +235,7 @@ FILA_FECHA_MONTO_RE = re.compile(r"^(\d{2}/\d{2}/\d{4}).*?(\d{1,3}(?:\.\d{3})*,\
 COMP_RE = re.compile(r"(?:comprobante|factura|cbte)[^\n\d]{0,30}(\d{4,5})\s?-\s?(\d{6,8})", re.I)
 PLAT_CLAVES = {
     "naranja": "Naranja X", "nacion servicios": "Banco Nación", "banco naci": "Banco Nación", "mercado pago": "Mercado Pago",
-    "payway": "Payway", "fiserv": "Fiserv", "+pagos": "+Pagos", "credicoop": "Banco Credicoop",
+    "payway": "Payway", "fiserv": "Fiserv", "+pagos": "+Pagos", "credicoop": "Payway",
     "galicia": "Banco Galicia", "santander": "Banco Santander", "bbva": "BBVA", "macro": "Banco Macro",
 }
 
@@ -506,7 +506,7 @@ def extraer_liquidacion_pdf(archivo):
         pct_c = pm_c[1].replace(".", ",") if pm_c else "3,00"
         datos["f_desglose"] = {"IVA 21%": iva_c, f"Percepción IVA RG 2408 ({pct_c}%)": perc_c, "SIRTAC / IIBB": sirtac_c}
         datos["f_neto"] = cred(r"SE ACREDITO EN:[\s\S]*?\$\s*([\d.]+,\d{2})") or None
-        datos["f_plat"] = "Banco Credicoop"
+        datos["f_plat"] = "Payway"
         datos["f_filas"] = [{"fecha": datos["f_fliq"], "monto": bruto_c}] if "f_fliq" in datos else []
         m_l = re.search(r"Liq\.\s*N[°º]\s*(\d+)", texto)
         if m_l:
@@ -1648,10 +1648,11 @@ def vista_contabilidad(nombre):
                ORDER BY l.plataforma""",
             (d6, h6),
         )
-        if plats.empty:
-            st.info("No hay impuestos desglosados en el rango.")
+        opciones_p = ["— Elegí una plataforma —"] + list(plats.plataforma)
+        plat = st.selectbox("Plataforma", opciones_p, key="r3_plat_v67")
+        if plat == opciones_p[0]:
+            st.info("Elegí una plataforma para ver el detalle de impuestos.")
         else:
-            plat = st.selectbox("Plataforma", list(plats.plataforma), key="r3_plat")
             det = consultar(
                 """SELECT l.id AS liquidacion, l.fecha_liquidacion, li.impuesto, li.monto
                    FROM liquidacion_impuestos li JOIN liquidaciones l ON l.id = li.liquidacion_id
