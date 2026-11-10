@@ -1162,7 +1162,12 @@ def cargar_csv_mercadopago(archivo, usuario):
         sid = str(r.get("SOURCE_ID", "") or "").strip()
         bruto = _num_csv(r.get("TRANSACTION_AMOUNT"))
         metodo = str(r.get("PAYMENT_METHOD_TYPE", "") or "").strip()
-        if not sid or sid.lower() == "nan" or bruto <= 0 or metodo == "available_money":
+        ttipo = str(r.get("TRANSACTION_TYPE", "") or "").strip().upper()
+        if not sid or sid.lower() == "nan" or bruto <= 0:
+            continue
+        if metodo not in ("credit_card", "debit_card", "bank_transfer"):
+            continue
+        if ttipo and "LIQUID" not in ttipo and "APPROV" not in ttipo:
             continue
         if not consultar("SELECT id FROM liquidaciones WHERE nro_lote=?", (sid,)).empty:
             omitidas += 1
