@@ -1154,7 +1154,10 @@ def _fecha_csv(v):
 def cargar_csv_mercadopago(archivo, usuario):
     """Una liquidación por operación de cobro (SOURCE_ID). Omite pagos que salen de la cuenta y duplicados."""
     archivo.seek(0)
-    df = pd.read_csv(archivo, dtype=str, sep=None, engine="python")
+    raw_csv = archivo.read()
+    texto_csv = raw_csv.decode("utf-8-sig", errors="ignore")
+    sep_csv = ";" if texto_csv.count(";") > texto_csv.count(",") else ","
+    df = pd.read_csv(BytesIO(raw_csv), dtype=str, sep=sep_csv)
     df.columns = [str(c).strip() for c in df.columns]
     creadas, omitidas = 0, 0
     for _, r in df.iterrows():
@@ -1166,7 +1169,7 @@ def cargar_csv_mercadopago(archivo, usuario):
             continue
         if metodo not in ("credit_card", "debit_card", "bank_transfer"):
             continue
-        if ttipo and "LIQUID" not in ttipo and "APPROV" not in ttipo:
+        if ttipo and not any(k in ttipo for k in ("SETTLEMENT", "LIQUID", "APPROV")):
             continue
         if not consultar("SELECT id FROM liquidaciones WHERE nro_lote=?", (sid,)).empty:
             omitidas += 1
