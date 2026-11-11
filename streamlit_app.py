@@ -1341,13 +1341,24 @@ def cobros_directos_ui():
                 registrar("Cobro directo", f"Factura #{int(fid)}: {medio} {fmt(monto)}")
                 st.success("Cobro registrado.")
     cobros = consultar(
-        """SELECT c.fecha AS "Fecha", c.medio AS "Medio", c.monto AS "Monto",
+        """SELECT c.id AS cid, c.fecha AS "Fecha", c.medio AS "Medio", c.monto AS "Monto",
                   f.tipo AS "Tipo", f.punto_venta AS "PV", f.numero AS "Número", f.razon_social AS "Razón social"
            FROM cobros_directos c JOIN facturas f ON f.id = c.factura_id
-           ORDER BY c.fecha DESC"""
+           ORDER BY c.fecha DESC, c.id DESC"""
     )
     if not cobros.empty:
-        st.dataframe(cobros, hide_index=True)
+        st.dataframe(cobros.drop(columns=["cid"]), hide_index=True)
+        st.markdown("#### Desvincular cobro directo")
+        st.caption("Borra un cobro en efectivo o transferencia registrado por error.")
+        ops_cd = {}
+        for _, r in cobros.iterrows():
+            ops_cd[f"{r['Fecha']} | {r['Medio']} | {fmt(r['Monto'])} | {r['Tipo']} {r['PV']}-{r['Número']} | {r['Razón social']}"] = int(r["cid"])
+        el_cd = st.selectbox("Cobro directo a desvincular", list(ops_cd), key="desv_cd_sel")
+        if st.button("Desvincular cobro directo", key="desv_cd_btn"):
+            ejecutar("DELETE FROM cobros_directos WHERE id=?", (ops_cd[el_cd],))
+            registrar("Desvinculación cobro directo", f"Cobro #{ops_cd[el_cd]}")
+            st.session_state["vinc_msg"] = f"Cobro directo #{ops_cd[el_cd]} desvinculado."
+            st.rerun()
 
 
 def liq_vinculacion():
