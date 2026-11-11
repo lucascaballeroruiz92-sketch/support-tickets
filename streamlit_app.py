@@ -909,7 +909,6 @@ SUBMENUS = {
         "Extractos Bancarios": ["Carga de extractos", "Conciliación"],
     },
     "📈 Contabilidad": [
-        "Facturación vs. neto liquidado",
         "Facturas impagas",
         "Impuestos para declaración jurada",
         "Resumen de liquidaciones por plataforma",
@@ -1592,35 +1591,7 @@ def boton_pdf(titulo, df, extra=None):
 # ======================= 3. CONTABILIDAD =======================
 def vista_contabilidad(nombre):
     st.markdown(f"## 📈 Contabilidad - {nombre}")
-    if nombre == "Facturación vs. neto liquidado":
-        d4, h4 = selector_rango("r1")
-        r1 = consultar(
-            """SELECT f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, COALESCE(lf.monto, f.total) AS facturado,
-                      l.plataforma, l.comision, l.costo_financiero, l.iva_comision, l.retenciones,
-                      l.neto_acreditado, l.neto_esperado, l.estado,
-                      (SELECT COALESCE(SUM(COALESCE(lf2.monto, f2.total)),0) FROM liquidacion_factura lf2
-                         JOIN facturas f2 ON f2.id = lf2.factura_id WHERE lf2.liquidacion_id = l.id) AS tot
-               FROM facturas f
-               JOIN liquidacion_factura lf ON lf.factura_id = f.id
-               JOIN liquidaciones l ON l.id = lf.liquidacion_id
-               WHERE f.fecha BETWEEN ? AND ? ORDER BY f.fecha""",
-            (d4, h4),
-        )
-        if r1.empty:
-            st.info("No hay facturas vinculadas en el rango.")
-        else:
-            p = r1.facturado / r1.tot
-            r1["descuentos"] = p * (r1.comision + r1.costo_financiero + r1.iva_comision + r1.retenciones)
-            r1["neto_final"] = p * r1.neto_acreditado.fillna(r1.neto_esperado)
-            r1["factura"] = r1.tipo + " " + r1.punto_venta.astype(str) + "-" + r1.numero.astype(str)
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Facturado", fmt(r1.facturado.sum()))
-            m2.metric("Descuentos", fmt(r1.descuentos.sum()))
-            m3.metric("Neto final", fmt(r1.neto_final.sum()))
-            tabla_r1 = r1[["fecha", "factura", "razon_social", "plataforma", "facturado", "descuentos", "neto_final", "estado"]]
-            st.dataframe(tabla_r1, hide_index=True)
-            boton_pdf("Facturación vs. neto liquidado", tabla_r1)
-    elif nombre == "Facturas impagas":
+    if nombre == "Facturas impagas":
         d5, h5 = selector_rango("r2")
         r2 = consultar(
             """SELECT f.id, f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total,
@@ -1693,18 +1664,33 @@ def vista_contabilidad(nombre):
                 boton_pdf(f"Impuestos para declaración jurada - {plat}", tipo_p, [("Detalle por liquidación", det_p)])
     else:
         d3, h3 = selector_rango("inf")
+        plats_r = consultar(
+            "SELECT DISTINCT plataforma FROM liquidaciones WHERE fecha_liquidacion BETWEEN ? AND ? ORDER BY plataforma",
+            (d3, h3),
+        )
+        opciones_r = ["Todas las plataformas"] + list(plats_r.plataforma)
+        plat_r = st.selectbox("Plataforma", opciones_r, key="res_plat")
         liq = consultar("SELECT * FROM liquidaciones WHERE fecha_liquidacion BETWEEN ? AND ?", (d3, h3))
+        if plat_r != opciones_r[0]:
+            liq = liq[liq.plataforma == plat_r]
         if liq.empty:
-            st.info("No hay liquidaciones en el rango.")
+            st.info("No hay liquidaciones para ese rango y plataforma.")
         else:
+            liq = liq.copy()
+            liq["neto_acreditado"] = liq.neto_acreditado.fillna(0.0)
             liq["deducciones"] = liq.comision + liq.costo_financiero + liq.iva_comision + liq.retenciones
             k1, k2, k3 = st.columns(3)
-            k1.metric("Bruto", fmt(liq.bruto.sum()))
+            k1.metric("Facturado (bruto)", fmt(liq.bruto.sum()))
             k2.metric("Deducciones", fmt(liq.deducciones.sum()))
-            k3.metric("Neto acreditado", fmt(liq.neto_acreditado.sum()))
+            k3.metric("Cobrado (neto acreditado)", fmt(liq.neto_acreditado.sum()))
             res_pl = liq.groupby("plataforma")[["bruto", "deducciones", "neto_acreditado"]].sum().reset_index()
+            res_pl = res_pl.rename(columns={"plataforma": "Plataforma", "bruto": "Facturado", "deducciones": "Deducciones", "neto_acreditado": "Cobrado"})
+            st.markdown("#### Totales por plataforma")
             st.dataframe(res_pl, hide_index=True)
-            boton_pdf("Resumen de liquidaciones por plataforma", res_pl)
+            detalle_r = liq[["fecha_liquidacion", "plataforma", "nro_lote", "bruto", "deducciones", "neto_acreditado"]].rename(columns={"fecha_liquidacion": "Fecha", "plataforma": "Plataforma", "nro_lote": "Nº liquidación", "bruto": "Facturado", "deducciones": "Deducciones", "neto_acreditado": "Cobrado"})
+            st.markdown("#### Detalle por liquidación")
+            st.dataframe(detalle_r, hide_index=True)
+            boton_pdf("Resumen de liquidaciones por plataforma", res_pl, [("Detalle por liquidación", detalle_r)])
 
 
 if vista == "Carga de Registro de Ventas":
