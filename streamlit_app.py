@@ -338,8 +338,9 @@ def extraer_liquidacion_pdf(archivo):
 
     arancel = sumar_si(lambda s: s.startswith("arancel") or s.startswith("comision"))
     bonif = sumar_si(lambda s: s.startswith("bonificacion"))
-    datos["f_com"] = round(arancel - bonif, 2)
-    datos["f_cf"] = sumar_si(lambda s: re.match(r"(interes|financiacion|costo financiero|cargo financiero)", s) is not None)
+    datos["f_com"] = round(arancel, 2)
+    # La bonificación de Naranja reduce los intereses (costo financiero), no la comisión
+    datos["f_cf"] = round(sumar_si(lambda s: re.match(r"(interes|financiacion|costo financiero|cargo financiero)", s) is not None) - bonif, 2)
 
     iva21 = sumar_si(lambda s: s.startswith("iva") and tasa_iva(s) == 21.0)
     iva105 = sumar_si(lambda s: s.startswith("iva") and tasa_iva(s) == 10.5)
@@ -353,7 +354,7 @@ def extraer_liquidacion_pdf(archivo):
     datos["f_ret"] = round(perc + sirtac + debcred, 2)
     datos["f_desglose"] = {
         "IVA 21%": iva21, "IVA 10,5%": iva105, "IVA 27%": iva27,
-        "Percepciones": perc, "SIRTAC / IIBB": sirtac, "Débitos y créditos": debcred,
+        "Percepción en IVA": perc, "SIRTAC / IIBB": sirtac, "Débitos y créditos": debcred,
     }
 
     neto = None
@@ -504,7 +505,7 @@ def extraer_liquidacion_pdf(archivo):
         datos["f_ret"] = round(perc_c + sirtac_c, 2)
         pm_c = re.search(r"IVA\s+RG\s*\d+\s+(\d+[.,]\d+)\s?%", texto)
         pct_c = pm_c[1].replace(".", ",") if pm_c else "3,00"
-        datos["f_desglose"] = {"IVA 21%": iva_c, f"Percepción IVA RG 2408 ({pct_c}%)": perc_c, "SIRTAC / IIBB": sirtac_c}
+        datos["f_desglose"] = {"IVA 21%": iva_c, f"Percepción en IVA RG 2408 ({pct_c}%)": perc_c, "SIRTAC / IIBB": sirtac_c}
         datos["f_neto"] = cred(r"SE ACREDITO EN:[\s\S]*?\$\s*([\d.]+,\d{2})") or None
         datos["f_plat"] = "Payway"
         datos["f_filas"] = [{"fecha": datos["f_fliq"], "monto": bruto_c}] if "f_fliq" in datos else []
@@ -1167,7 +1168,7 @@ def cargar_csv_mercadopago(archivo, usuario):
         ttipo = str(r.get("TRANSACTION_TYPE", "") or "").strip().upper()
         if not sid or sid.lower() == "nan" or bruto <= 0:
             continue
-        if metodo not in ("credit_card", "debit_card", "bank_transfer"):
+        if metodo not in ("credit_card", "debit_card"):
             continue
         if ttipo and not any(k in ttipo for k in ("SETTLEMENT", "LIQUID", "APPROV")):
             continue
@@ -1476,7 +1477,7 @@ def liq_planilla():
     for col in ["IVA 21%", "IVA 10,5%", "IVA 27%"]:
         out[col] = (df.liq.map(imp_p[col]) if (not imp_p.empty and col in imp_p) else 0) * peso
     perc_cols = [c for c in imp_p.columns if str(c).startswith("Percepci")] if not imp_p.empty else []
-    out["PERCEPCIONES"] = (df.liq.map(imp_p[perc_cols].sum(axis=1)) if perc_cols else 0) * peso
+    out["PERCEPCIÓN EN IVA"] = (df.liq.map(imp_p[perc_cols].sum(axis=1)) if perc_cols else 0) * peso
     for col, etiqueta in [("SIRTAC / IIBB", "SIRTAC / IIBB"),
                           ("Impuesto débitos y créditos", "DÉB. Y CRÉD.")]:
         out[etiqueta] = (df.liq.map(imp_p[col]) if (not imp_p.empty and col in imp_p) else 0) * peso
