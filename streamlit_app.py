@@ -903,6 +903,45 @@ def vista_extractos(op, usuario):
 
 
 # ======================= PDF DE REPORTES =======================
+def anchos_tabla(pdf, d):
+    """Ancho de cada columna según el contenido, para que quepan los datos completos."""
+    largos = []
+    for j, c in enumerate(d.columns):
+        vals = d.iloc[:, j].tolist()
+        m = max([len(str(c))] + [len(fmt(v)) if isinstance(v, float) else len(str(v)) for v in vals])
+        largos.append(min(max(m, 6), 40))
+    s = sum(largos)
+    return [273.0 * l / s for l in largos]
+
+
+def filas_pdf(pdf, vals, anchos, bold=False):
+    """Dibuja una fila con ajuste de texto: ninguna celda se corta."""
+    lh = 4.2
+    pdf.set_font("Helvetica", "B" if bold else "", 8)
+    lineas = []
+    for v, w in zip(vals, anchos):
+        cur, out = "", []
+        for p in str(v).split():
+            cand = f"{cur} {p}".strip()
+            if not cur or pdf.get_string_width(cand) <= w - 2:
+                cur = cand
+            else:
+                out.append(cur)
+                cur = p
+        out.append(cur)
+        lineas.append(out)
+    alto = max(len(l) for l in lineas) * lh + 2
+    if pdf.get_y() + alto > pdf.h - pdf.b_margin:
+        pdf.add_page()
+    y0, x0 = pdf.get_y(), pdf.l_margin
+    x = x0
+    for ls, w in zip(lineas, anchos):
+        pdf.rect(x, y0, w, alto)
+        for k, linea in enumerate(ls):
+            pdf.set_xy(x + 1, y0 + 1 + k * lh)
+            pdf.cell(w - 2, lh, linea)
+        x += w
+    pdf.set_xy(x0, y0 + alto)
 def pdf_reporte(titulo, secciones, tachar=None):
     from fpdf import FPDF
 
@@ -923,20 +962,10 @@ def pdf_reporte(titulo, secciones, tachar=None):
             pdf.ln(4)
             pdf.set_font("Helvetica", "B", 11)
             pdf.cell(0, 8, t(sub), new_x="LMARGIN", new_y="NEXT")
-        ancho = (297 - 24) / max(len(d.columns), 1)
-        pdf.set_font("Helvetica", "B", 8)
-        for c in d.columns:
-            pdf.cell(ancho, 7, t(c)[:28], border=1)
-        pdf.ln()
-        pdf.set_font("Helvetica", "", 8)
-        for i, (_, fila) in enumerate(d.iterrows()):
-            y0 = pdf.get_y()
-            for v in fila.tolist():
-                pdf.cell(ancho, 6, t(v)[:32], border=1)
-            pdf.ln()
-            if tachar is not None and sub is None and i < len(tachar) and tachar[i]:
-                pdf.set_line_width(0.3)
-                pdf.line(12, y0 + 3, 285, y0 + 3)
+        anchos = anchos_tabla(pdf, d)
+        filas_pdf(pdf, [t(c) for c in d.columns], anchos, bold=True)
+        for _, fila in d.iterrows():
+            filas_pdf(pdf, [t(v) for v in fila.tolist()], anchos)
     return bytes(pdf.output())
 
 
@@ -951,7 +980,10 @@ def vista_contabilidad(op):
         d, h = rango("imp")
         r2 = q("""SELECT f.id, f.fecha, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total,
                   (SELECT COUNT(*) FROM liquidacion_factura lf WHERE lf.factura_id = f.id) AS vinc,
-                  (SELECT string_agg(DISTINCT c.medio, ', ') FROM cobros_directos c WHERE c.factura_id = f.id) AS medios
+                  (SELECT string_agg(DISTINCT c.medio, ', ') FROM cobros_directos c WHERE c.factura_id = f.id) AS medios,
+                  (SELECT string_agg(DISTINCT COALESCE(NULLIF(l.nro_lote, ''), '#' || l.id::text), ', ')
+                     FROM liquidacion_factura lf JOIN liquidaciones l ON l.id = lf.liquidacion_id
+                     WHERE lf.factura_id = f.id) AS liqs
                   FROM facturas f WHERE f.fecha BETWEEN ? AND ? ORDER BY f.fecha""", (d, h))
         if r2.empty:
             st.info("No hay facturas en el rango.")
@@ -968,17 +1000,17 @@ def vista_contabilidad(op):
         for r in r2.itertuples():
             est = "text-decoration: line-through; color: #888;" if r.pagada else ""
             celdas = [str(r.fecha), f"{r.tipo} {r.punto_venta}-{r.numero}", str(r.razon_social),
-                      fmt(r.total), fmt(r.pendiente), r.estado]
+                      fmt(r.total), fmt(r.pendiente), r.estado, r.liqs if isinstance(r.liqs, str) else "-"]
             tds = "".join(f"<td style='padding:4px 8px;border-bottom:1px solid #ddd;{est}'>{html.escape(c)}</td>" for c in celdas)
             filas.append(f"<tr>{tds}</tr>")
         enc = "".join(f"<th style='padding:4px 8px;text-align:left;border-bottom:2px solid #999'>{c}</th>"
-                      for c in ["Fecha", "Comprobante", "Razón social", "Total", "Saldo pendiente", "Estado"])
+                      for c in ["Fecha", "Comprobante", "Razón social", "Total", "Saldo pendiente", "Estado", "Liquidación Nº"])
         st.markdown(f"<table style='width:100%;border-collapse:collapse'><thead><tr>{enc}</tr></thead>"
                     f"<tbody>{''.join(filas)}</tbody></table>", unsafe_allow_html=True)
         boton_pdf("Facturas impagas", [(None, pd.DataFrame({
             "Fecha": r2.fecha, "Comprobante": r2.tipo + " " + r2.punto_venta.astype(str) + "-" + r2.numero.astype(str),
             "Razón social": r2.razon_social, "Total": r2.total, "Saldo pendiente": r2.pendiente,
-            "Estado": r2.estado}))], tachar=list(r2.pagada))
+            "Estado": r2.estado, "Liquidación Nº": r2.liqs.fillna("-")}))])
 
     elif op == "Impuestos para declaración jurada":
         d, h = rango("dj")
