@@ -747,18 +747,31 @@ def liq_vinculacion(usuario):
             st.rerun()
 
 
-def liq_planilla():
-    st.subheader("Planilla de liquidaciones por comprobante")
-    st.caption("Una fila por factura. Las deducciones de cada liquidación se reparten según el peso de la factura.")
-    df = q("""SELECT l.id AS liq, l.plataforma, l.nro_lote AS lote, l.fecha_acreditacion, l.neto_acreditado,
+def excel_bytes(df, hoja="2026"):
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df.to_excel(w, sheet_name=hoja, index=False)
+    return buf.getvalue()
+
+
+def armar_planilla(desde=None, hasta=None, plataforma=None):
+    """Una fila por comprobante vinculado, con deducciones prorrateadas. Devuelve vacío si no hay."""
+    where, params = ["1=1"], []
+    if desde:
+        where.append("l.fecha_liquidacion BETWEEN ? AND ?")
+        params += [desde, hasta]
+    if plataforma:
+        where.append("l.plataforma = ?")
+        params.append(plataforma)
+    df = q(f"""SELECT l.id AS liq, l.plataforma, l.nro_lote AS lote, l.fecha_acreditacion, l.neto_acreditado,
               l.comision, l.costo_financiero, l.iva_comision, l.retenciones,
               f.fecha AS fecha_fac, f.tipo, f.punto_venta, f.numero, f.razon_social, f.total,
               COALESCE(lf.monto, f.total) AS imp
               FROM liquidacion_factura lf JOIN liquidaciones l ON l.id = lf.liquidacion_id
-              JOIN facturas f ON f.id = lf.factura_id ORDER BY f.fecha, l.id""")
+              JOIN facturas f ON f.id = lf.factura_id WHERE {' AND '.join(where)}
+              ORDER BY f.fecha, l.id""", params)
     if df.empty:
-        st.info("Todavía no hay comprobantes vinculados.")
-        return
+        return df
     df["peso"] = df.imp / df.groupby("liq")["imp"].transform("sum")
     imp = q("SELECT liquidacion_id AS liq, impuesto, SUM(monto) AS m FROM liquidacion_impuestos GROUP BY 1, 2")
     piv = imp.pivot(index="liq", columns="impuesto", values="m").fillna(0) if not imp.empty else pd.DataFrame()
@@ -779,12 +792,18 @@ def liq_planilla():
     out["NETO PARA ESTA VENTA"] = df.imp - out["TOTAL DEDUCCIONES"]
     out["FECHA ACRED."] = df.fecha_acreditacion
     out["ACREDITADO BANCO"] = df.neto_acreditado * df.peso
-    out = out.round(2)
+    return out.round(2)
+
+
+def liq_planilla():
+    st.subheader("Planilla de liquidaciones por comprobante")
+    st.caption("Una fila por factura. Las deducciones de cada liquidación se reparten según el peso de la factura.")
+    out = armar_planilla()
+    if out.empty:
+        st.info("Todavía no hay comprobantes vinculados.")
+        return
     tabla(out)
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        out.to_excel(w, sheet_name="2026", index=False)
-    st.download_button("📥 Descargar planilla en Excel", data=buf.getvalue(), file_name="planilla_liquidaciones.xlsx",
+    st.download_button("📥 Descargar planilla en Excel", data=excel_bytes(out), file_name="planilla_liquidaciones.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
@@ -1066,7 +1085,19 @@ def vista_contabilidad(op):
         det.columns = ["Fecha", "Plataforma", "Nº liquidación", "Facturado", "Deducciones", "Cobrado"]
         st.markdown("#### Detalle por liquidación")
         tabla(det)
-        boton_pdf("Resumen de liquidaciones por plataforma", [(None, res_pl), ("Detalle por liquidación", det)])
+        st.markdown("#### Detalle por comprobante (cómo se acredita cada venta)")
+        st.caption("Desde el monto de cada factura hasta lo que efectivamente se acredita por esa venta.")
+        plan = armar_planilla(d, h, None if plat == opc[0] else plat)
+        if plan.empty:
+            st.info("No hay comprobantes vinculados en este rango.")
+            secciones = [(None, res_pl), ("Detalle por liquidación", det)]
+        else:
+            tabla(plan)
+            st.download_button("📥 Descargar detalle en Excel", data=excel_bytes(plan),
+                               file_name="detalle_por_comprobante.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            secciones = [(None, res_pl), ("Detalle por liquidación", det), ("Detalle por comprobante", plan)]
+        boton_pdf("Resumen de liquidaciones por plataforma", secciones)
 
 
 # ======================= LOGIN Y MENÚ =======================
