@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS extracto_movimientos (id SERIAL PRIMARY KEY, extracto
     descripcion TEXT, monto DOUBLE PRECISION);
 CREATE TABLE IF NOT EXISTS cobros_directos (id SERIAL PRIMARY KEY, factura_id INTEGER, medio TEXT, fecha TEXT,
     monto DOUBLE PRECISION, cargado_por TEXT, fecha_carga TEXT);
+CREATE TABLE IF NOT EXISTS nota_credito_factura (id SERIAL PRIMARY KEY, nc_id INTEGER, factura_id INTEGER, monto DOUBLE PRECISION, fecha TEXT, cargado_por TEXT, fecha_carga TEXT);
 CREATE TABLE IF NOT EXISTS actividad (id SERIAL PRIMARY KEY, momento TEXT, usuario TEXT, accion TEXT, detalle TEXT);
 """
 LIQ_HIJAS = ("liquidacion_impuestos", "liquidacion_filas", "liquidacion_comprobantes",
@@ -148,11 +149,39 @@ def etiqueta_liq(r):
     return f"#{int(r.id)} - {r.plataforma} - {r.nro_lote or 's/lote'} - {r.fecha_liquidacion}"
 
 
+def es_nc(tipo):
+    """Nota de crédito: se reconoce por el tipo de comprobante de AFIP."""
+    t = sin_acentos(tipo)
+    return "credito" in t or t.strip().startswith("nc")
+
+
+def mask_nc(df):
+    return pd.Series([es_nc(t) for t in df.tipo], index=df.index, dtype=bool)
+
+
+def solo_nc(df):
+    return df[mask_nc(df)]
+
+
+def sin_nc(df):
+    return df[~mask_nc(df)]
+
+
+def aplicado_nc(nid):
+    """Monto de una nota de crédito ya aplicado a facturas."""
+    return float(q("SELECT COALESCE(SUM(monto),0) AS m FROM nota_credito_factura WHERE nc_id=?", (nid,)).m.iloc[0])
+
+
+def aplicado_factura(fid):
+    """Monto que las notas de crédito restaron a una factura."""
+    return float(q("SELECT COALESCE(SUM(monto),0) AS m FROM nota_credito_factura WHERE factura_id=?", (fid,)).m.iloc[0])
+
+
 def saldo_factura(fid, total):
-    """Total menos lo imputado a liquidaciones y lo cobrado directo."""
+    """Total menos liquidaciones, cobros directos y notas de crédito aplicadas."""
     a = q("SELECT COALESCE(SUM(COALESCE(monto,0)),0) AS m FROM liquidacion_factura WHERE factura_id=?", (fid,))
     b = q("SELECT COALESCE(SUM(monto),0) AS m FROM cobros_directos WHERE factura_id=?", (fid,))
-    return round(float(total) - float(a.m.iloc[0]) - float(b.m.iloc[0]), 2)
+    return round(float(total) - float(a.m.iloc[0]) - float(b.m.iloc[0]) - aplicado_factura(fid), 2)
 
 
 # ======================= LECTURA DE PDF =======================
@@ -420,7 +449,7 @@ def borrar_todos_los_datos():
     with get_engine().begin() as con:
         con.exec_driver_sql(
             "TRUNCATE liquidacion_impuestos, liquidacion_filas, liquidacion_comprobantes, liquidacion_pdf, "
-            "liquidacion_factura, liquidaciones, extracto_movimientos, extractos, facturas, cobros_directos, "
+            "liquidacion_factura, liquidaciones, extracto_movimientos, extractos, facturas, cobros_directos, nota_credito_factura, "
             "actividad RESTART IDENTITY")
 
 
@@ -508,7 +537,7 @@ def importar_facturas(archivo, usuario):
                        total, cae, cargado_por, fecha_carga) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                        ON CONFLICT (tipo, punto_venta, numero, cuit_emisor) DO NOTHING""",
                     (f.date().isoformat(), txt(g("tipo")), txt(g("pv")), txt(g("numero")), txt(g("cuit")),
-                     txt(g("razon")), num(g("neto")), num(g("iva")), num(g("total")), txt(g("cae")),
+                     txt(g("razon")), num(g("neto")), num(g("iva")), abs(num(g("total"))), txt(g("cae")),
                      usuario, ahora()))
     registrar("Importación AFIP", f"{nuevas} facturas nuevas de {len(df)} en {archivo.name}")
     return nuevas, len(df)
@@ -552,7 +581,7 @@ def vista_ventas(usuario):
     d, h = rango("fact")
     fac = q("""SELECT fecha, punto_venta, numero, razon_social, neto, iva, total, cargado_por
                FROM facturas WHERE fecha BETWEEN ? AND ? ORDER BY fecha DESC""", (d, h))
-    st.caption(f"{len(fac)} facturas en el rango | Total: {fmt(fac.total.sum())}")
+    st.caption(f"{len(fac)} comprobantes en el rango | Total neto (descontando notas de crédito): " + fmt(sum(-float(t) if es_nc(tp) else float(t) for tp, t in zip(fac.tipo, fac.total))))
     tabla(fac)
 
     st.markdown("#### Eliminar comprobante")
@@ -564,12 +593,85 @@ def vista_ventas(usuario):
            for r in todas.itertuples()}
     el = st.selectbox("Comprobante a eliminar", list(ops), key="del_fac_sel")
     fid = ops[el]
-    if int(q("SELECT COUNT(*) AS n FROM liquidacion_factura WHERE factura_id=?", (fid,)).n.iloc[0]) > 0:
-        st.warning("No se puede eliminar: está vinculado a una liquidación. Desvinculala primero.")
+    if int(q("SELECT COUNT(*) AS n FROM liquidacion_factura WHERE factura_id=?", (fid,)).n.iloc[0]) + int(q("SELECT COUNT(*) AS n FROM nota_credito_factura WHERE factura_id=? OR nc_id=?", (fid, fid)).n.iloc[0]) > 0:
+        st.warning("No se puede eliminar: está vinculado a una liquidación o a una nota de crédito. Desvinculalo primero.")
     elif st.button("🗑️ Eliminar comprobante"):
         x("DELETE FROM cobros_directos WHERE factura_id=?", (fid,))
         x("DELETE FROM facturas WHERE id=?", (fid,))
         registrar("Comprobante eliminado", f"Factura #{fid} {el}")
+        st.rerun()
+
+
+# ======================= VENTAS: NOTAS DE CRÉDITO =======================
+def vista_notas_credito(usuario):
+    st.subheader("Notas de crédito")
+    st.caption("Una nota de crédito resta a una factura, total o parcialmente. Se importan desde AFIP en 'Registro de ventas'.")
+    todas = q("SELECT id, fecha, tipo, punto_venta, numero, razon_social, total FROM facturas ORDER BY fecha DESC, id DESC")
+    ncs = solo_nc(todas).copy()
+    if ncs.empty:
+        st.info("No hay notas de crédito cargadas. Importalas desde AFIP en Registro de ventas.")
+    else:
+        ncs["aplicado"] = [aplicado_nc(int(i)) for i in ncs.id]
+        ncs["saldo"] = [round(float(t) - a, 2) for t, a in zip(ncs.total, ncs.aplicado)]
+        st.markdown("#### Notas de crédito cargadas")
+        tabla(pd.DataFrame({
+            "Fecha": ncs.fecha,
+            "Comprobante": ncs.tipo + " " + ncs.punto_venta.astype(str) + "-" + ncs.numero.astype(str),
+            "Razón social": ncs.razon_social, "Total NC": ncs.total,
+            "Aplicado": ncs.aplicado, "Saldo disponible": ncs.saldo}))
+
+        st.markdown("#### Aplicar nota de crédito a una factura")
+        disp = ncs[ncs.saldo > TOL]
+        facs = sin_nc(todas).copy()
+        if disp.empty:
+            st.info("Todas las notas de crédito ya están aplicadas.")
+        elif facs.empty:
+            st.info("No hay facturas cargadas para aplicar la nota de crédito.")
+        else:
+            facs["saldo"] = [saldo_factura(int(i), t) for i, t in zip(facs.id, facs.total)]
+            facs = facs[facs.saldo > TOL]
+            if facs.empty:
+                st.info("No hay facturas con saldo pendiente para aplicar una nota de crédito.")
+            else:
+                ops_nc = {f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | Saldo NC {fmt(r.saldo)}": int(r.id)
+                          for r in disp.itertuples()}
+                fac_ops = {int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | Saldo {fmt(r.saldo)}"
+                           for r in facs.itertuples()}
+                c1, c2, c3 = st.columns(3)
+                nc_el = c1.selectbox("Nota de crédito", list(ops_nc), key="nc_sel")
+                fid = c2.selectbox("Factura a la que se aplica", list(fac_ops), format_func=lambda i: fac_ops[i], key="nc_fac")
+                nid = ops_nc[nc_el]
+                maximo = round(min(float(disp[disp.id == nid].saldo.iloc[0]), float(facs[facs.id == fid].saldo.iloc[0])), 2)
+                monto = c3.number_input("Monto a aplicar (total o parcial)", min_value=0.0, max_value=maximo,
+                                        value=maximo, step=100.0, format="%.2f", key=f"nc_monto_{nid}_{fid}")
+                if st.button("Aplicar nota de crédito", type="primary"):
+                    if monto <= 0:
+                        st.error("El monto debe ser mayor a cero.")
+                    else:
+                        x("INSERT INTO nota_credito_factura (nc_id, factura_id, monto, fecha, cargado_por, fecha_carga) VALUES (?,?,?,?,?,?)",
+                          (nid, int(fid), round(float(monto), 2), date.today().isoformat(), usuario, ahora()))
+                        registrar("Nota de crédito aplicada", f"NC #{nid} a factura #{int(fid)}: {fmt(monto)}")
+                        st.rerun()
+
+    st.markdown("#### Notas de crédito aplicadas")
+    aplic = q("""SELECT n.id, n.fecha, n.monto, nc.tipo AS nc_tipo, nc.punto_venta AS nc_pv, nc.numero AS nc_num,
+                 f.tipo, f.punto_venta, f.numero, f.razon_social
+                 FROM nota_credito_factura n JOIN facturas nc ON nc.id = n.nc_id JOIN facturas f ON f.id = n.factura_id
+                 ORDER BY n.id DESC""")
+    if aplic.empty:
+        st.info("Todavía no hay notas de crédito aplicadas.")
+        return
+    tabla(pd.DataFrame({
+        "Fecha": aplic.fecha,
+        "Nota de crédito": aplic.nc_tipo + " " + aplic.nc_pv.astype(str) + "-" + aplic.nc_num.astype(str),
+        "Factura": aplic.tipo + " " + aplic.punto_venta.astype(str) + "-" + aplic.numero.astype(str),
+        "Razón social": aplic.razon_social, "Monto aplicado": aplic.monto}))
+    ops_d = {f"{r.fecha} | NC {r.nc_tipo} {r.nc_pv}-{r.nc_num} → {r.tipo} {r.punto_venta}-{r.numero} | {fmt(r.monto)}": int(r.id)
+             for r in aplic.itertuples()}
+    el = st.selectbox("Aplicación a quitar", list(ops_d), key="nc_desv_sel")
+    if st.button("Quitar aplicación"):
+        x("DELETE FROM nota_credito_factura WHERE id=?", (ops_d[el],))
+        registrar("Nota de crédito desvinculada", f"Aplicación #{ops_d[el]}")
         st.rerun()
 
 
@@ -638,6 +740,7 @@ def cobros_directos_ui(usuario):
     st.markdown("#### Cobros directos (efectivo o transferencia)")
     st.caption("Registrá la parte de una factura cobrada sin tarjeta, para que no figure como impaga.")
     facts = q("SELECT id, fecha, tipo, punto_venta, numero, razon_social, total FROM facturas ORDER BY fecha DESC")
+    facts = sin_nc(facts)
     if facts.empty:
         st.info("No hay facturas cargadas.")
         return
@@ -681,6 +784,7 @@ def cobros_directos_ui(usuario):
 def vinculacion_manual(L, usuario):
     liq_id, bruto = int(L.id), float(L.bruto or 0)
     facts = q("SELECT id, fecha, tipo, punto_venta, numero, razon_social, total FROM facturas ORDER BY fecha DESC")
+    facts = sin_nc(facts).copy()
     facts["saldo"] = [saldo_factura(int(i), t) for i, t in zip(facts.id, facts.total)]
     facts = facts[facts.saldo > TOL]
     etiq = {int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | Total {fmt(r.total)} | Saldo {fmt(r.saldo)}"
@@ -1004,13 +1108,16 @@ def vista_contabilidad(op):
                      FROM liquidacion_factura lf JOIN liquidaciones l ON l.id = lf.liquidacion_id
                      WHERE lf.factura_id = f.id) AS liqs
                   FROM facturas f WHERE f.fecha BETWEEN ? AND ? ORDER BY f.fecha""", (d, h))
+        r2 = sin_nc(r2)
         if r2.empty:
             st.info("No hay facturas en el rango.")
             return
         r2["pendiente"] = [saldo_factura(int(i), t) for i, t in zip(r2.id, r2.total)]
         r2["pagada"] = r2.pendiente <= TOL
-        r2["medio"] = [" + ".join((["Liquidación de tarjeta"] if v > 0 else []) + ([m] if isinstance(m, str) else []))
-                       for v, m in zip(r2.vinc, r2.medios)]
+        r2["nc"] = [aplicado_factura(int(i)) for i in r2.id]
+        r2["medio"] = [" + ".join(((["Liquidación de tarjeta"] if v > 0 else []) + ([m] if isinstance(m, str) else [])
+                                   + (["Nota de crédito"] if n > TOL else [])))
+                       for v, m, n in zip(r2.vinc, r2.medios, r2.nc)]
         r2["estado"] = [("Pagada" if p else "Parcial" if m else "Pendiente") + (f" ({m})" if m else "")
                         for p, m in zip(r2.pagada, r2.medio)]
         st.metric("Total impago", fmt(r2[~r2.pagada].pendiente.sum()))
@@ -1131,7 +1238,7 @@ if st.sidebar.button("🚪 Salir"):
     st.rerun()
 
 MODULOS = {
-    "📊 Ventas": ["Registro de ventas"],
+    "📊 Ventas": ["Registro de ventas", "Notas de crédito"],
     "💰 Tesorería - Liquidaciones": ["Carga de liquidación", "Vinculación de comprobantes", "Planilla Excel"],
     "📈 Contabilidad": ["Facturas impagas", "Impuestos para declaración jurada", "Resumen por plataforma"],
 }
@@ -1150,7 +1257,10 @@ if usuario == ADMIN:
 
 st.title("Castillo de Oro")
 if modulo == "📊 Ventas":
-    vista_ventas(usuario)
+    if sub == "Notas de crédito":
+        vista_notas_credito(usuario)
+    else:
+        vista_ventas(usuario)
 elif modulo == "💰 Tesorería - Liquidaciones":
     st.markdown("## 💰 Tesorería - Liquidaciones")
     if sub == "Carga de liquidación":
