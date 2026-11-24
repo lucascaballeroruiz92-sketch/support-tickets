@@ -1096,7 +1096,11 @@ def vista_contabilidad(op):
             st.download_button("📥 Descargar detalle en Excel", data=excel_bytes(plan),
                                file_name="detalle_por_comprobante.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            secciones = [(None, res_pl), ("Detalle por liquidación", det), ("Detalle por comprobante", plan)]
+            pdf_comp = pd.DataFrame({
+                "Fecha": plan["FECHA FAC."], "Comprobante": plan["COMPROBANTE"], "Cliente": plan["CLIENTE"],
+                "Monto factura": plan["MONTO FACTURA"], "Deducciones": plan["TOTAL DEDUCCIONES"],
+                "Neto cobrado": plan["NETO PARA ESTA VENTA"]})
+            secciones = [(None, res_pl), ("Detalle por liquidación", det), ("Detalle por comprobante", pdf_comp)]
         boton_pdf("Resumen de liquidaciones por plataforma", secciones)
 
 
@@ -1129,7 +1133,6 @@ if st.sidebar.button("🚪 Salir"):
 MODULOS = {
     "📊 Ventas": ["Registro de ventas"],
     "💰 Tesorería - Liquidaciones": ["Carga de liquidación", "Vinculación de comprobantes", "Planilla Excel"],
-    "💰 Tesorería - Extractos": ["Carga de extractos", "Conciliación"],
     "📈 Contabilidad": ["Facturas impagas", "Impuestos para declaración jurada", "Resumen por plataforma"],
 }
 modulo = st.sidebar.radio("Módulo", list(MODULOS), key="modulo")
@@ -1156,9 +1159,6 @@ elif modulo == "💰 Tesorería - Liquidaciones":
         liq_vinculacion(usuario)
     else:
         liq_planilla()
-elif modulo == "💰 Tesorería - Extractos":
-    st.markdown("## 💰 Tesorería - Extractos Bancarios")
-    vista_extractos(sub, usuario)
 else:
     st.markdown(f"## 📈 Contabilidad - {sub}")
     vista_contabilidad(sub)
