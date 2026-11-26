@@ -1211,6 +1211,20 @@ def vista_contabilidad(op):
         boton_pdf("Resumen de liquidaciones por plataforma", secciones)
 
 
+def reportes_ventas():
+    st.markdown("#### Reportes")
+    cols = st.columns(len(REPORTES_VENTAS))
+    for i, (col, r) in enumerate(zip(cols, REPORTES_VENTAS)):
+        with col:
+            with st.container(key=f"rep_{i}"):
+                activo = st.session_state.get("rep") == r
+                if st.button(r, key=f"repbtn_{i}", type="primary" if activo else "secondary", use_container_width=True):
+                    st.session_state["rep"] = r
+                    st.rerun()
+    if st.session_state.get("rep") == "Facturas impagas":
+        vista_contabilidad("Facturas impagas")
+
+
 # ======================= LOGIN Y MENÚ =======================
 init_db()
 if "usuario" not in st.session_state:
@@ -1236,11 +1250,12 @@ usuario = st.session_state["usuario"]
 MODS = [("ventas", "📊", "Ventas"), ("tesoreria", "💰", "Tesorería"),
         ("contabilidad", "📈", "Contabilidad"), ("config", "⚙️", "Configuración")]
 SUBS = {
-    "ventas": ["Registro de ventas", "Notas de crédito"],
+    "ventas": ["Ventas", "Notas de crédito", "Notas de débito", "Reportes"],
     "tesoreria": ["Carga de liquidación", "Vinculación de comprobantes", "Planilla Excel"],
-    "contabilidad": ["Facturas impagas", "Impuestos para declaración jurada", "Resumen por plataforma"],
+    "contabilidad": ["Impuestos para declaración jurada", "Resumen por plataforma"],
     "config": ["Reiniciar datos de prueba"],
 }
+REPORTES_VENTAS = ["Facturas impagas"]
 ESTILO = """
 <style>
 [class*="st-key-mod_"] button {
@@ -1278,7 +1293,8 @@ if "sub" not in st.session_state:
 
 def ir_a(mod):
     st.session_state["mod"] = mod
-    st.session_state["sub"] = SUBS[mod][0]
+    st.session_state["sub"] = None
+    st.session_state["rep"] = None
     st.rerun()
 
 
@@ -1302,6 +1318,7 @@ def menu_subs(mod):
                 if st.button(s, key=f"subbtn_{mod}_{i}", type="primary" if activo else "secondary",
                              use_container_width=True):
                     st.session_state["sub"] = s
+                    st.session_state["rep"] = None
                     st.rerun()
 
 
@@ -1340,9 +1357,15 @@ else:
     st.markdown(f"## {icono_mod} {nombre_mod}")
     menu_subs(mod)
     st.divider()
-    if mod == "ventas":
+    if sub is None:
+        pass  # Solo se muestran los subtítulos hasta que se elige uno
+    elif mod == "ventas":
         if sub == "Notas de crédito":
             vista_notas_credito(usuario)
+        elif sub == "Notas de débito":
+            st.info("Notas de débito: en desarrollo.")
+        elif sub == "Reportes":
+            reportes_ventas()
         else:
             vista_ventas(usuario)
     elif mod == "tesoreria":
