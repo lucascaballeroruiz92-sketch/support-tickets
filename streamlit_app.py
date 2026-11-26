@@ -15,7 +15,7 @@ USUARIOS = {"socio1": "clave1", "socio2": "clave2"}  # Cambiar. Recomendado: st.
 ADMIN = "socio1"
 TOL = 0.05
 
-st.set_page_config(page_title="Castillo de Oro - Liquidaciones", page_icon="💳", layout="wide")
+st.set_page_config(page_title="CONTA+", page_icon="💳", layout="wide")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS facturas (id SERIAL PRIMARY KEY, fecha TEXT, tipo TEXT, punto_venta TEXT, numero TEXT,
@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS cobros_directos (id SERIAL PRIMARY KEY, factura_id IN
     monto DOUBLE PRECISION, cargado_por TEXT, fecha_carga TEXT);
 CREATE TABLE IF NOT EXISTS nota_credito_factura (id SERIAL PRIMARY KEY, nc_id INTEGER, factura_id INTEGER, monto DOUBLE PRECISION, fecha TEXT, cargado_por TEXT, fecha_carga TEXT);
 CREATE TABLE IF NOT EXISTS actividad (id SERIAL PRIMARY KEY, momento TEXT, usuario TEXT, accion TEXT, detalle TEXT);
+CREATE TABLE IF NOT EXISTS empresas (id SERIAL PRIMARY KEY, nombre TEXT UNIQUE, cargado_por TEXT, fecha_carga TEXT);
 """
 LIQ_HIJAS = ("liquidacion_impuestos", "liquidacion_filas", "liquidacion_comprobantes",
              "liquidacion_pdf", "liquidacion_factura")
@@ -82,6 +83,24 @@ def init_db():
         for sent in SCHEMA.split(";"):
             if sent.strip():
                 con.exec_driver_sql(sent)
+    # Empresa inicial (cliente). Las demás se agregan desde el login de administrador.
+    x("INSERT INTO empresas (nombre, cargado_por, fecha_carga) VALUES (?,?,?) ON CONFLICT (nombre) DO NOTHING",
+      ("Castillo de Oro", "sistema", ahora()))
+
+
+def listar_empresas():
+    return list(q("SELECT nombre FROM empresas ORDER BY nombre").nombre)
+
+
+def agregar_empresa(nombre, usuario):
+    nombre = " ".join(str(nombre or "").split())
+    if not nombre:
+        return False, "Escribí el nombre de la empresa."
+    if sin_acentos(nombre) in [sin_acentos(e) for e in listar_empresas()]:
+        return False, f"La empresa {nombre} ya existe."
+    x("INSERT INTO empresas (nombre, cargado_por, fecha_carga) VALUES (?,?,?)", (nombre, usuario, ahora()))
+    registrar("Empresa agregada", nombre)
+    return True, f"Empresa {nombre} agregada."
 
 
 def ahora():
@@ -1230,18 +1249,73 @@ init_db()
 if "usuario" not in st.session_state:
     st.session_state["usuario"] = None
 
+FONDO_CSS = """
+<style>
+.stApp { background: linear-gradient(135deg, #FF9A9E 0%, #FAD0C4 18%, #FFE29F 36%, #A8EDEA 56%, #B5EAD7 72%, #C3B1E1 88%, #FBC2EB 100%) !important; }
+header[data-testid="stHeader"] { background: transparent !important; }
+.login-titulo { text-align: center; margin: 36px 0 18px 0; }
+.login-titulo h1 { font-size: 4.2rem; font-weight: 900; color: #FFFFFF; text-shadow: 0 4px 14px rgba(90,40,120,.45); margin: 0; letter-spacing: 1px; }
+.login-titulo p { font-size: 1.3rem; font-weight: 700; color: #FFFFFF; text-shadow: 0 2px 8px rgba(90,40,120,.4); margin-top: 6px; }
+[data-testid="stForm"] { background: rgba(255,255,255,.94); border-radius: 26px; padding: 28px; border: none !important; box-shadow: 0 12px 30px rgba(90,40,120,.2); }
+[data-testid="stForm"] button { background: linear-gradient(90deg, #FF8FAB, #B9A3F0) !important; border: none !important; color: #FFFFFF !important; font-weight: 800 !important; font-size: 1.1rem !important; width: 100%; border-radius: 14px !important; }
+.st-key-emp_busq { background: rgba(255,255,255,.94); border-radius: 22px; padding: 18px 22px; box-shadow: 0 10px 24px rgba(90,40,120,.18); margin-bottom: 24px; }
+[class*="st-key-emp_"] button { min-height: 130px !important; background: #FFFFFF !important; border: 3px solid #F9A8D4 !important; border-radius: 22px !important; font-size: 1.8rem !important; font-weight: 800 !important; color: #5B3A8C !important; box-shadow: 0 8px 20px rgba(90,40,120,.15) !important; }
+[class*="st-key-emp_"] button p { color: #5B3A8C !important; font-size: 1.8rem !important; font-weight: 800 !important; }
+</style>
+"""
+# Empresas: se guardan en la base (tabla empresas)
+
+
+def pantalla_login():
+    st.markdown(FONDO_CSS, unsafe_allow_html=True)
+    st.markdown("<div class='login-titulo'><h1>CONTA+</h1><p>Ventas · Tesorería · Contabilidad</p></div>", unsafe_allow_html=True)
+    _, c, _ = st.columns([1, 2, 1])
+    with c:
+        with st.form("login"):
+            u = st.selectbox("👤 Usuario", list(USUARIOS))
+            p = st.text_input("🔒 Contraseña", type="password")
+            if st.form_submit_button("Ingresar"):
+                if USUARIOS[u] == p:
+                    st.session_state["usuario"] = u
+                    registrar("Ingreso", "Sesión iniciada")
+                    st.rerun()
+                else:
+                    st.error("Contraseña incorrecta.")
+
+
+def pantalla_empresas():
+    st.markdown(FONDO_CSS, unsafe_allow_html=True)
+    st.markdown("<div class='login-titulo'><h1>Empresas</h1><p>Buscá tu empresa para entrar a sus módulos</p></div>", unsafe_allow_html=True)
+    _, c, _ = st.columns([1, 2, 1])
+    with c:
+        with st.container(key="emp_busq"):
+            busq = st.text_input("🔎 Buscar empresa", placeholder="Ej: Castillo de Oro", key="emp_txt")
+        encontradas = [e for e in listar_empresas() if sin_acentos(busq.strip()) in sin_acentos(e)]
+        if not encontradas:
+            st.info("No se encontró ninguna empresa con ese nombre.")
+        for i, e in enumerate(encontradas):
+            with st.container(key=f"emp_{i}"):
+                if st.button(f"🏢  {e}", key=f"empbtn_{i}", use_container_width=True):
+                    st.session_state["empresa"] = e
+                    st.rerun()
+        if usuario == ADMIN:
+            with st.expander("➕ Agregar empresa"):
+                with st.form("form_nueva_emp", clear_on_submit=True):
+                    nombre_nuevo = st.text_input("Nombre de la empresa")
+                    if st.form_submit_button("Guardar empresa"):
+                        ok, msg = agregar_empresa(nombre_nuevo, usuario)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+
+if "empresa" not in st.session_state:
+    st.session_state["empresa"] = None
+
 if not st.session_state["usuario"]:
-    st.title("Castillo de Oro")
-    with st.form("login"):
-        u = st.selectbox("Usuario", list(USUARIOS))
-        p = st.text_input("Contraseña", type="password")
-        if st.form_submit_button("Ingresar", type="primary"):
-            if USUARIOS[u] == p:
-                st.session_state["usuario"] = u
-                registrar("Ingreso", "Sesión iniciada")
-                st.rerun()
-            else:
-                st.error("Contraseña incorrecta.")
+    pantalla_login()
     st.stop()
 
 usuario = st.session_state["usuario"]
@@ -1335,16 +1409,25 @@ def configuracion():
 
 # ======================= BARRA LATERAL =======================
 with st.sidebar:
-    st.markdown(f"### 👤 {usuario}")
+    st.markdown("### CONTA+")
+    st.markdown(f"👤 **{usuario}**")
+    if st.session_state.get("empresa") and st.button("🏢 Cambiar empresa", key="btn_cambiar_emp", use_container_width=True):
+        st.session_state["empresa"] = None
+        st.session_state["mod"] = None
+        st.rerun()
     with st.container(key="salir"):
         if st.button("🚪 Salir", key="btn_salir", use_container_width=True):
             registrar("Salida", "Sesión cerrada")
             st.session_state["usuario"] = None
+            st.session_state["empresa"] = None
             st.session_state["mod"] = None
             st.rerun()
 
 # ======================= CONTENIDO =======================
-st.title("Castillo de Oro")
+if st.session_state["empresa"] is None:
+    pantalla_empresas()
+    st.stop()
+st.title(st.session_state["empresa"])
 mod, sub = st.session_state["mod"], st.session_state["sub"]
 if mod is None:
     tablero()
