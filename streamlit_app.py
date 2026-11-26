@@ -66,6 +66,7 @@ def get_engine():
 def q(sql, params=()):
     """Lectura. Los placeholders se escriben con '?'."""
     with get_engine().connect() as con:
+        _set_schema(con)
         return pd.read_sql_query(sql.replace("?", "%s"), con.connection, params=tuple(params))
 
 
@@ -73,23 +74,58 @@ def x(sql, params=(), devolver_id=False):
     """Escritura. Con devolver_id retorna el id generado; si no, filas afectadas."""
     sql = sql.replace("?", "%s")
     with get_engine().begin() as con:
+        _set_schema(con)
         if devolver_id:
             return con.exec_driver_sql(sql + " RETURNING id", tuple(params)).scalar()
         return con.exec_driver_sql(sql, tuple(params)).rowcount
 
 
+def _schema():
+    """Esquema de la empresa abierta. Castillo de Oro usa 'public' (sus datos originales)."""
+    return st.session_state.get("esquema") or "public"
+
+
+def _set_schema(con):
+    con.exec_driver_sql(f'SET search_path TO "{_schema()}"')
+
+
+def crear_esquema(esq):
+    """Crea un esquema vacío con las mismas tablas (sin la tabla de empresas)."""
+    with get_engine().begin() as con:
+        con.exec_driver_sql(f'CREATE SCHEMA IF NOT EXISTS "{esq}"')
+        con.exec_driver_sql(f'SET search_path TO "{esq}"')
+        for sent in SCHEMA.split(";"):
+            if sent.strip() and "TABLE IF NOT EXISTS empresas" not in sent:
+                con.exec_driver_sql(sent)
+
+
+@st.cache_resource
 def init_db():
     with get_engine().begin() as con:
+        con.exec_driver_sql('SET search_path TO public')
         for sent in SCHEMA.split(";"):
             if sent.strip():
                 con.exec_driver_sql(sent)
-    # Empresa inicial (cliente). Las demás se agregan desde el login de administrador.
-    x("INSERT INTO empresas (nombre, cargado_por, fecha_carga) VALUES (?,?,?) ON CONFLICT (nombre) DO NOTHING",
-      ("Castillo de Oro", "sistema", ahora()))
+        con.exec_driver_sql("ALTER TABLE empresas ADD COLUMN IF NOT EXISTS esquema TEXT")
+        con.exec_driver_sql("INSERT INTO empresas (nombre, cargado_por, fecha_carga, esquema) "
+                            "VALUES ('Castillo de Oro', 'sistema', %s, 'public') ON CONFLICT (nombre) DO NOTHING",
+                            (ahora(),))
+        con.exec_driver_sql("UPDATE empresas SET esquema = 'public' WHERE nombre = 'Castillo de Oro' AND esquema IS NULL")
+        con.exec_driver_sql("UPDATE empresas SET esquema = 'emp_' || id WHERE esquema IS NULL")
+        esquemas = [r[0] for r in con.exec_driver_sql("SELECT esquema FROM empresas").fetchall()]
+    for esq in esquemas:
+        if esq != "public":
+            crear_esquema(esq)
+    return True
 
 
 def listar_empresas():
-    return list(q("SELECT nombre FROM empresas ORDER BY nombre").nombre)
+    return list(q("SELECT nombre FROM public.empresas ORDER BY nombre").nombre)
+
+
+def esquema_de(nombre):
+    df = q("SELECT esquema FROM public.empresas WHERE nombre = ?", (nombre,))
+    return df.esquema.iloc[0] if not df.empty and isinstance(df.esquema.iloc[0], str) else "public"
 
 
 def agregar_empresa(nombre, usuario):
@@ -98,9 +134,33 @@ def agregar_empresa(nombre, usuario):
         return False, "Escribí el nombre de la empresa."
     if sin_acentos(nombre) in [sin_acentos(e) for e in listar_empresas()]:
         return False, f"La empresa {nombre} ya existe."
-    x("INSERT INTO empresas (nombre, cargado_por, fecha_carga) VALUES (?,?,?)", (nombre, usuario, ahora()))
-    registrar("Empresa agregada", nombre)
+    nid = x("INSERT INTO public.empresas (nombre, cargado_por, fecha_carga) VALUES (?,?,?)",
+            (nombre, usuario, ahora()), devolver_id=True)
+    esq = f"emp_{nid}"
+    x("UPDATE public.empresas SET esquema = ? WHERE id = ?", (esq, nid))
+    crear_esquema(esq)
     return True, f"Empresa {nombre} agregada."
+
+
+def eliminar_empresa(nombre):
+    """Borra la empresa y todos sus datos. Castillo de Oro (esquema public) se vacía en sus tablas."""
+    df = q("SELECT id, esquema FROM public.empresas WHERE nombre = ?", (nombre,))
+    if df.empty:
+        return False, "La empresa no existe."
+    eid = int(df.id.iloc[0])
+    esq = df.esquema.iloc[0]
+    if not isinstance(esq, str) or not esq:
+        esq = f"emp_{eid}"
+    with get_engine().begin() as con:
+        if esq == "public":
+            con.exec_driver_sql("SET search_path TO public")
+            con.exec_driver_sql("TRUNCATE liquidacion_impuestos, liquidacion_filas, liquidacion_comprobantes, "
+                                "liquidacion_pdf, liquidacion_factura, liquidaciones, extracto_movimientos, "
+                                "extractos, facturas, cobros_directos, nota_credito_factura, actividad RESTART IDENTITY")
+        else:
+            con.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{esq}" CASCADE')
+        con.exec_driver_sql("DELETE FROM public.empresas WHERE id = %s", (eid,))
+    return True, f"Empresa {nombre} eliminada.
 
 
 def ahora():
@@ -466,6 +526,7 @@ def borrar_todas_liquidaciones():
 
 def borrar_todos_los_datos():
     with get_engine().begin() as con:
+        _set_schema(con)
         con.exec_driver_sql(
             "TRUNCATE liquidacion_impuestos, liquidacion_filas, liquidacion_comprobantes, liquidacion_pdf, "
             "liquidacion_factura, liquidaciones, extracto_movimientos, extractos, facturas, cobros_directos, nota_credito_factura, "
@@ -1297,6 +1358,7 @@ def pantalla_empresas():
             with st.container(key=f"emp_{i}"):
                 if st.button(f"🏢  {e}", key=f"empbtn_{i}", use_container_width=True):
                     st.session_state["empresa"] = e
+                    st.session_state["esquema"] = esquema_de(e)
                     st.rerun()
         if usuario == ADMIN:
             with st.expander("➕ Agregar empresa"):
@@ -1397,6 +1459,26 @@ def menu_subs(mod):
                 st.rerun()
 
 
+def eliminar_empresa_ui():
+    st.subheader("Eliminar empresas")
+    st.caption("Borra la empresa con todos sus comprobantes, liquidaciones, extractos y actividad. No se puede deshacer.")
+    if st.session_state.get("msg_emp"):
+        st.success(st.session_state.pop("msg_emp"))
+    emps = listar_empresas()
+    if not emps:
+        st.info("No hay empresas cargadas.")
+        return
+    el = st.selectbox("Empresa a eliminar", emps, key="del_emp_sel")
+    confirma = st.text_input("Escribí el nombre exacto de la empresa para confirmar", key="del_emp_txt")
+    if st.button("🗑️ Eliminar empresa", type="primary", disabled=confirma.strip() != el, key="btn_del_emp"):
+        ok, msg = eliminar_empresa(el)
+        if ok and st.session_state.get("empresa") == el:
+            st.session_state["empresa"] = None
+            st.session_state["mod"] = None
+        st.session_state["msg_emp"] = msg
+        st.rerun()
+
+
 def configuracion():
     st.subheader("Reiniciar datos de prueba")
     st.caption("Borra liquidaciones, facturas, extractos y actividad. No se puede deshacer.")
@@ -1405,6 +1487,8 @@ def configuracion():
         borrar_todos_los_datos()
         st.session_state.pop("resultado_conc", None)
         st.rerun()
+    st.divider()
+    eliminar_empresa_ui()
 
 
 # ======================= BARRA LATERAL =======================
