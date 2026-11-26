@@ -1259,11 +1259,12 @@ REPORTES_VENTAS = ["Facturas impagas"]
 ESTILO = """
 <style>
 [class*="st-key-mod_"] button {
-    height: 150px !important; font-size: 1.45rem !important; font-weight: 700 !important;
-    border: none !important; border-radius: 22px !important; color: #3b3350 !important;
+    height: 150px !important; font-size: 1.9rem !important; font-weight: 800 !important;
+    border: none !important; border-radius: 22px !important; color: #FFFFFF !important; text-shadow: 0 2px 6px rgba(60,40,90,.35);
     box-shadow: 0 6px 16px rgba(60,40,90,.10); transition: transform .2s, box-shadow .2s;
 }
 [class*="st-key-mod_"] button:hover { transform: translateY(-4px); box-shadow: 0 10px 22px rgba(60,40,90,.18); }
+[class*="st-key-mod_"] button p { color: #FFFFFF !important; font-size: 1.9rem !important; font-weight: 800 !important; }
 .st-key-mod_ventas button { background: #FBD5E3 !important; }
 .st-key-mod_tesoreria button { background: #CDEFE2 !important; }
 .st-key-mod_contabilidad button { background: #D9D2F5 !important; }
@@ -1274,7 +1275,8 @@ ESTILO = """
 .st-key-mod_tesoreria { animation-delay: .10s; }
 .st-key-mod_contabilidad { animation-delay: .20s; }
 .st-key-mod_config { animation-delay: .30s; }
-[class*="st-key-sub_"] button { font-size: 1.2rem !important; font-weight: 600 !important; min-height: 60px !important; }
+[class*="st-key-sub_"] button { font-size: 1.25rem !important; font-weight: 700 !important; min-height: 74px !important; border-radius: 16px !important; }
+.st-key-atras_sub button { min-height: 74px !important; font-size: 1.3rem !important; font-weight: 700 !important; border-radius: 16px !important; }
 .st-key-sub_0 { animation-delay: .00s; }
 .st-key-sub_1 { animation-delay: .12s; }
 .st-key-sub_2 { animation-delay: .24s; }
@@ -1309,17 +1311,13 @@ def tablero():
 
 
 def menu_subs(mod):
-    opciones = SUBS[mod]
-    cols = st.columns(len(opciones))
-    for i, (col, s) in enumerate(zip(cols, opciones)):
-        with col:
-            with st.container(key=f"sub_{i}"):
-                activo = st.session_state["sub"] == s
-                if st.button(s, key=f"subbtn_{mod}_{i}", type="primary" if activo else "secondary",
-                             use_container_width=True):
-                    st.session_state["sub"] = s
-                    st.session_state["rep"] = None
-                    st.rerun()
+    """Subtítulos en columna vertical, uno debajo del otro."""
+    for i, s in enumerate(SUBS[mod]):
+        with st.container(key=f"sub_{i}"):
+            if st.button(s, key=f"subbtn_{mod}_{i}", type="secondary", use_container_width=True):
+                st.session_state["sub"] = s
+                st.session_state["rep"] = None
+                st.rerun()
 
 
 def configuracion():
@@ -1355,8 +1353,14 @@ else:
     nombre_mod = next(n for k, _, n in MODS if k == mod)
     icono_mod = next(i for k, i, _ in MODS if k == mod)
     st.markdown(f"## {icono_mod} {nombre_mod}")
-    menu_subs(mod)
-    st.divider()
+    if sub is None:
+        menu_subs(mod)
+    else:
+        if st.button("⬅️  Atrás", key="atras_sub", type="primary", use_container_width=True):
+            st.session_state["sub"] = None
+            st.session_state["rep"] = None
+            st.rerun()
+        st.divider()
     if sub is None:
         pass  # Solo se muestran los subtítulos hasta que se elige uno
     elif mod == "ventas":
