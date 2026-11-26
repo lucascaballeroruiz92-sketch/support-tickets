@@ -579,7 +579,7 @@ def vista_ventas(usuario):
 
     st.markdown("#### Facturas cargadas")
     d, h = rango("fact")
-    fac = q("""SELECT fecha, punto_venta, numero, razon_social, neto, iva, total, cargado_por
+    fac = q("""SELECT fecha, tipo, punto_venta, numero, razon_social, neto, iva, total, cargado_por
                FROM facturas WHERE fecha BETWEEN ? AND ? ORDER BY fecha DESC""", (d, h))
     st.caption(f"{len(fac)} comprobantes en el rango | Total neto (descontando notas de crédito): " + fmt(sum(-float(t) if es_nc(tp) else float(t) for tp, t in zip(fac.tipo, fac.total))))
     tabla(fac)
