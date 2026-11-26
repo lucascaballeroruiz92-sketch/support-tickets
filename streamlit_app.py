@@ -1250,7 +1250,7 @@ usuario = st.session_state["usuario"]
 MODS = [("ventas", "📊", "Ventas"), ("tesoreria", "💰", "Tesorería"),
         ("contabilidad", "📈", "Contabilidad"), ("config", "⚙️", "Configuración")]
 SUBS = {
-    "ventas": ["Ventas", "Notas de crédito", "Notas de débito", "Reportes"],
+    "ventas": ["Facturas", "Notas de crédito", "Notas de débito", "Reportes"],
     "tesoreria": ["Carga de liquidación", "Vinculación de comprobantes", "Planilla Excel"],
     "contabilidad": ["Impuestos para declaración jurada", "Resumen por plataforma"],
     "config": ["Reiniciar datos de prueba"],
@@ -1275,17 +1275,20 @@ ESTILO = """
 .st-key-mod_tesoreria { animation-delay: .10s; }
 .st-key-mod_contabilidad { animation-delay: .20s; }
 .st-key-mod_config { animation-delay: .30s; }
-[class*="st-key-sub_"] button { font-size: 1.25rem !important; font-weight: 700 !important; min-height: 74px !important; border-radius: 16px !important; }
+[class*="st-key-sub_"] button { min-height: 90px !important; border-radius: 18px !important; border: none !important; box-shadow: 0 4px 12px rgba(60,40,90,.12) !important; }
+[class*="st-key-sub_"] button p { color: #FFFFFF !important; font-size: 1.6rem !important; font-weight: 800 !important; text-shadow: 0 2px 6px rgba(60,40,90,.45); }
 .st-key-atras_sub button { min-height: 74px !important; font-size: 1.3rem !important; font-weight: 700 !important; border-radius: 16px !important; }
-.st-key-sub_0 { animation-delay: .00s; }
-.st-key-sub_1 { animation-delay: .12s; }
-.st-key-sub_2 { animation-delay: .24s; }
-.st-key-sub_3 { animation-delay: .36s; }
 .st-key-salir { position: fixed; bottom: 18px; left: 18px; width: 240px; z-index: 999; }
 .st-key-salir button { background: #F3EEF8 !important; border-radius: 14px !important; }
 </style>
 """
 st.markdown(ESTILO, unsafe_allow_html=True)
+
+COLORES = {"ventas": "#FBD5E3", "tesoreria": "#CDEFE2", "contabilidad": "#D9D2F5", "config": "#FCE6BF"}
+st.markdown("<style>" + "".join(
+    f".st-key-sub_{k}_{i} button {{ background: {c} !important; }} "
+    f".st-key-sub_{k}_{i} {{ animation-delay: {0.12 * i:.2f}s; }} "
+    for k, c in COLORES.items() for i in range(len(SUBS[k]))) + "</style>", unsafe_allow_html=True)
 
 if "mod" not in st.session_state:
     st.session_state["mod"] = None
@@ -1313,7 +1316,7 @@ def tablero():
 def menu_subs(mod):
     """Subtítulos en columna vertical, uno debajo del otro."""
     for i, s in enumerate(SUBS[mod]):
-        with st.container(key=f"sub_{i}"):
+        with st.container(key=f"sub_{mod}_{i}"):
             if st.button(s, key=f"subbtn_{mod}_{i}", type="secondary", use_container_width=True):
                 st.session_state["sub"] = s
                 st.session_state["rep"] = None
