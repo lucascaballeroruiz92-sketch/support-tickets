@@ -1259,6 +1259,7 @@ ESTILO = """
 .st-key-mod_tesoreria { animation-delay: .10s; }
 .st-key-mod_contabilidad { animation-delay: .20s; }
 .st-key-mod_config { animation-delay: .30s; }
+[class*="st-key-sub_"] button { font-size: 1.2rem !important; font-weight: 600 !important; min-height: 60px !important; }
 .st-key-sub_0 { animation-delay: .00s; }
 .st-key-sub_1 { animation-delay: .12s; }
 .st-key-sub_2 { animation-delay: .24s; }
@@ -1317,9 +1318,6 @@ def configuracion():
 # ======================= BARRA LATERAL =======================
 with st.sidebar:
     st.markdown(f"### 👤 {usuario}")
-    if st.button("🏠 Tablero", key="side_tablero", use_container_width=True):
-        st.session_state["mod"] = None
-        st.rerun()
     with st.container(key="salir"):
         if st.button("🚪 Salir", key="btn_salir", use_container_width=True):
             registrar("Salida", "Sesión cerrada")
