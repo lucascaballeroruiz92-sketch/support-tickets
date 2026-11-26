@@ -1231,44 +1231,133 @@ if not st.session_state["usuario"]:
     st.stop()
 
 usuario = st.session_state["usuario"]
-st.sidebar.markdown(f"👤 **{usuario}**")
-if st.sidebar.button("🚪 Salir"):
-    registrar("Salida", "Sesión cerrada")
-    st.session_state["usuario"] = None
+
+# ======================= TABLERO DE CONTROL =======================
+MODS = [("ventas", "📊", "Ventas"), ("tesoreria", "💰", "Tesorería"),
+        ("contabilidad", "📈", "Contabilidad"), ("config", "⚙️", "Configuración")]
+SUBS = {
+    "ventas": ["Registro de ventas", "Notas de crédito"],
+    "tesoreria": ["Carga de liquidación", "Vinculación de comprobantes", "Planilla Excel"],
+    "contabilidad": ["Facturas impagas", "Impuestos para declaración jurada", "Resumen por plataforma"],
+    "config": ["Reiniciar datos de prueba"],
+}
+ESTILO = """
+<style>
+[class*="st-key-mod_"] button {
+    height: 150px !important; font-size: 1.45rem !important; font-weight: 700 !important;
+    border: none !important; border-radius: 22px !important; color: #3b3350 !important;
+    box-shadow: 0 6px 16px rgba(60,40,90,.10); transition: transform .2s, box-shadow .2s;
+}
+[class*="st-key-mod_"] button:hover { transform: translateY(-4px); box-shadow: 0 10px 22px rgba(60,40,90,.18); }
+.st-key-mod_ventas button { background: #FBD5E3 !important; }
+.st-key-mod_tesoreria button { background: #CDEFE2 !important; }
+.st-key-mod_contabilidad button { background: #D9D2F5 !important; }
+.st-key-mod_config button { background: #FCE6BF !important; }
+@keyframes cascada { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+.st-key-mod_ventas, .st-key-mod_tesoreria, .st-key-mod_contabilidad, .st-key-mod_config,
+[class*="st-key-sub_"] { animation: cascada .45s ease both; }
+.st-key-mod_tesoreria { animation-delay: .10s; }
+.st-key-mod_contabilidad { animation-delay: .20s; }
+.st-key-mod_config { animation-delay: .30s; }
+.st-key-sub_0 { animation-delay: .00s; }
+.st-key-sub_1 { animation-delay: .12s; }
+.st-key-sub_2 { animation-delay: .24s; }
+.st-key-sub_3 { animation-delay: .36s; }
+.st-key-salir { position: fixed; bottom: 18px; left: 18px; width: 240px; z-index: 999; }
+.st-key-salir button { background: #F3EEF8 !important; border-radius: 14px !important; }
+</style>
+"""
+st.markdown(ESTILO, unsafe_allow_html=True)
+
+if "mod" not in st.session_state:
+    st.session_state["mod"] = None
+if "sub" not in st.session_state:
+    st.session_state["sub"] = None
+
+
+def ir_a(mod):
+    st.session_state["mod"] = mod
+    st.session_state["sub"] = SUBS[mod][0]
     st.rerun()
 
-MODULOS = {
-    "📊 Ventas": ["Registro de ventas", "Notas de crédito"],
-    "💰 Tesorería - Liquidaciones": ["Carga de liquidación", "Vinculación de comprobantes", "Planilla Excel"],
-    "📈 Contabilidad": ["Facturas impagas", "Impuestos para declaración jurada", "Resumen por plataforma"],
-}
-modulo = st.sidebar.radio("Módulo", list(MODULOS), key="modulo")
-subs = MODULOS[modulo]
-sub = st.sidebar.radio("Sección", subs, key=f"sub_{modulo}")
 
-if usuario == ADMIN:
-    with st.sidebar.expander("⚠️ Reiniciar datos de prueba"):
-        st.caption("Borra liquidaciones, facturas, extractos y actividad. No se puede deshacer.")
-        conf_todo = st.checkbox("Entiendo que se borrará todo", key="chk_reset_todo")
-        if st.button("Borrar todos los datos", disabled=not conf_todo, key="btn_reset_todo"):
-            borrar_todos_los_datos()
-            st.session_state.pop("resultado_conc", None)
+def tablero():
+    st.markdown("### ¿Qué querés gestionar hoy?")
+    mods = [m for m in MODS if m[0] != "config" or usuario == ADMIN]
+    cols = st.columns(len(mods))
+    for col, (k, icono, nombre) in zip(cols, mods):
+        with col:
+            if st.button(f"{icono}  {nombre}", key=f"mod_{k}", use_container_width=True):
+                ir_a(k)
+
+
+def menu_subs(mod):
+    opciones = SUBS[mod]
+    cols = st.columns(len(opciones))
+    for i, (col, s) in enumerate(zip(cols, opciones)):
+        with col:
+            with st.container(key=f"sub_{i}"):
+                activo = st.session_state["sub"] == s
+                if st.button(s, key=f"subbtn_{mod}_{i}", type="primary" if activo else "secondary",
+                             use_container_width=True):
+                    st.session_state["sub"] = s
+                    st.rerun()
+
+
+def configuracion():
+    st.subheader("Reiniciar datos de prueba")
+    st.caption("Borra liquidaciones, facturas, extractos y actividad. No se puede deshacer.")
+    conf_todo = st.checkbox("Entiendo que se borrará todo", key="chk_reset_todo")
+    if st.button("Borrar todos los datos", disabled=not conf_todo, key="btn_reset_todo"):
+        borrar_todos_los_datos()
+        st.session_state.pop("resultado_conc", None)
+        st.rerun()
+
+
+# ======================= BARRA LATERAL =======================
+with st.sidebar:
+    st.markdown(f"### 👤 {usuario}")
+    if st.button("🏠 Tablero", key="side_tablero", use_container_width=True):
+        st.session_state["mod"] = None
+        st.rerun()
+    with st.container(key="salir"):
+        if st.button("🚪 Salir", key="btn_salir", use_container_width=True):
+            registrar("Salida", "Sesión cerrada")
+            st.session_state["usuario"] = None
+            st.session_state["mod"] = None
             st.rerun()
 
+# ======================= CONTENIDO =======================
 st.title("Castillo de Oro")
-if modulo == "📊 Ventas":
-    if sub == "Notas de crédito":
-        vista_notas_credito(usuario)
-    else:
-        vista_ventas(usuario)
-elif modulo == "💰 Tesorería - Liquidaciones":
-    st.markdown("## 💰 Tesorería - Liquidaciones")
-    if sub == "Carga de liquidación":
-        liq_carga(usuario)
-    elif sub == "Vinculación de comprobantes":
-        liq_vinculacion(usuario)
-    else:
-        liq_planilla()
+mod, sub = st.session_state["mod"], st.session_state["sub"]
+if mod is None:
+    tablero()
 else:
-    st.markdown(f"## 📈 Contabilidad - {sub}")
-    vista_contabilidad(sub)
+    top = st.columns([1, 5])
+    if top[0].button("← Tablero", key="volver"):
+        st.session_state["mod"] = None
+        st.rerun()
+    nombre_mod = next(n for k, _, n in MODS if k == mod)
+    icono_mod = next(i for k, i, _ in MODS if k == mod)
+    st.markdown(f"## {icono_mod} {nombre_mod}")
+    menu_subs(mod)
+    st.divider()
+    if mod == "ventas":
+        if sub == "Notas de crédito":
+            vista_notas_credito(usuario)
+        else:
+            vista_ventas(usuario)
+    elif mod == "tesoreria":
+        if sub == "Carga de liquidación":
+            liq_carga(usuario)
+        elif sub == "Vinculación de comprobantes":
+            liq_vinculacion(usuario)
+        else:
+            liq_planilla()
+    elif mod == "contabilidad":
+        vista_contabilidad(sub)
+    elif mod == "config":
+        if usuario == ADMIN:
+            configuracion()
+        else:
+            st.info("Solo el administrador puede acceder a la configuración.")
