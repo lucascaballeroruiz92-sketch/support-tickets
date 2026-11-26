@@ -1556,4 +1556,3 @@ else:
             configuracion()
         else:
             st.info("Solo el administrador puede acceder a la configuración.")
-
