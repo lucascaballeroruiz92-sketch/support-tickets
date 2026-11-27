@@ -269,6 +269,19 @@ def saldo_factura(fid, total):
     return round(float(total) - float(a.m.iloc[0]) - float(b.m.iloc[0]) - aplicado_factura(fid), 2)
 
 
+def saldos_facturas():
+    """Saldo pendiente de todas las facturas en una sola consulta. Devuelve {factura_id: saldo}."""
+    df = q("""SELECT f.id, f.total,
+              COALESCE((SELECT SUM(monto) FROM liquidacion_factura lf WHERE lf.factura_id = f.id), 0) AS liq,
+              COALESCE((SELECT SUM(monto) FROM cobros_directos c WHERE c.factura_id = f.id), 0) AS cob,
+              COALESCE((SELECT SUM(monto) FROM nota_credito_factura n WHERE n.factura_id = f.id), 0) AS nc
+              FROM facturas f""")
+    if df.empty:
+        return {}
+    df["saldo"] = (df.total.astype(float) - df.liq.astype(float) - df.cob.astype(float) - df.nc.astype(float)).round(2)
+    return dict(zip(df.id.astype(int), df.saldo.astype(float)))
+
+
 # ======================= LECTURA DE PDF =======================
 NUM_RE = re.compile(r"-?\$?\s?\d{1,3}(?:\.\d{3})*,\d{2}")
 FECHA_RE = re.compile(r"\b(\d{2})[/.-](\d{2})[/.-](\d{4})\b")
@@ -714,7 +727,8 @@ def vista_notas_credito(usuario):
         elif facs.empty:
             st.info("No hay facturas cargadas para aplicar la nota de crédito.")
         else:
-            facs["saldo"] = [saldo_factura(int(i), t) for i, t in zip(facs.id, facs.total)]
+            sal = saldos_facturas()
+            facs["saldo"] = [sal.get(int(i), 0.0) for i in facs.id]
             facs = facs[facs.saldo > TOL]
             if facs.empty:
                 st.info("No hay facturas con saldo pendiente para aplicar una nota de crédito.")
@@ -871,30 +885,37 @@ def vinculacion_manual(L, usuario):
     liq_id, bruto = int(L.id), float(L.bruto or 0)
     facts = q("SELECT id, fecha, tipo, punto_venta, numero, razon_social, total FROM facturas ORDER BY fecha DESC")
     facts = sin_nc(facts).copy()
-    facts["saldo"] = [saldo_factura(int(i), t) for i, t in zip(facts.id, facts.total)]
+    sal = saldos_facturas()
+    facts["saldo"] = [sal.get(int(i), 0.0) for i in facts.id]
     facts = facts[facts.saldo > TOL]
     etiq = {int(r.id): f"{r.fecha} | {r.tipo} {r.punto_venta}-{r.numero} | {r.razon_social} | Total {fmt(r.total)} | Saldo {fmt(r.saldo)}"
             for r in facts.itertuples()}
     st.metric("Bruto de la liquidación", fmt(bruto))
     sel = st.multiselect("Facturas AFIP / ventas manuales", list(etiq), format_func=lambda i: etiq[i],
                          key=f"vinc_fac_{liq_id}")
-    st.caption("Indicá cuánto de cada factura se cobró con esta liquidación. El resto puede ser efectivo o transferencia.")
-    imps = {}
-    for fid in sel:
-        fila = facts[facts.id == fid].iloc[0]
-        saldo = float(fila.saldo)
-        imps[fid] = st.number_input(
-            f"A imputar de {fila.tipo} {fila.punto_venta}-{fila.numero} (saldo disponible {fmt(saldo)})",
-            min_value=0.0, max_value=saldo, value=float(min(saldo, fila.total)), step=100.0,
-            format="%.2f", key=f"imp_{liq_id}_{fid}")
+    if not sel:
+        st.info("Elegí una o más facturas para imputar.")
+        return
+    # Los montos van en un formulario: no se recarga la página en cada campo
+    with st.form(f"form_vinc_{liq_id}"):
+        imps = {}
+        for fid in sel:
+            fila = facts[facts.id == fid].iloc[0]
+            saldo = float(fila.saldo)
+            imps[fid] = st.number_input(
+                f"A imputar de {fila.tipo} {fila.punto_venta}-{fila.numero} (saldo disponible {fmt(saldo)})",
+                min_value=0.0, max_value=saldo, value=float(min(saldo, fila.total)), step=100.0,
+                format="%.2f", key=f"imp_{liq_id}_{fid}")
+        st.caption("Indicá cuánto de cada factura se cobró con esta liquidación. El resto puede ser efectivo o transferencia.")
+        guardar = st.form_submit_button("Guardar vinculación", type="primary")
     total_imp = round(sum(imps.values()), 2)
     dif = round(bruto - total_imp, 2)
     st.metric("Total imputado", fmt(total_imp))
-    if sel and abs(dif) <= TOL:
+    if abs(dif) <= TOL:
         st.success("El total imputado coincide con el bruto de la liquidación.")
-    elif sel:
+    else:
         st.warning(f"Diferencia bruto − imputado: {fmt(dif)}. Si parte se cobró en efectivo o transferencia, es normal.")
-    if st.button("Guardar vinculación", type="primary", disabled=not sel):
+    if guardar:
         x("DELETE FROM liquidacion_factura WHERE liquidacion_id=?", (liq_id,))
         for fid in sel:
             x("INSERT INTO liquidacion_factura (liquidacion_id, factura_id, monto) VALUES (?,?,?)",
@@ -1198,7 +1219,8 @@ def vista_contabilidad(op):
         if r2.empty:
             st.info("No hay facturas en el rango.")
             return
-        r2["pendiente"] = [saldo_factura(int(i), t) for i, t in zip(r2.id, r2.total)]
+        sal = saldos_facturas()
+        r2["pendiente"] = [sal.get(int(i), 0.0) for i in r2.id]
         r2["pagada"] = r2.pendiente <= TOL
         r2["nc"] = [aplicado_factura(int(i)) for i in r2.id]
         r2["medio"] = [" + ".join(((["Liquidación de tarjeta"] if v > 0 else []) + ([m] if isinstance(m, str) else [])
