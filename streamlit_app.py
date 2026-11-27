@@ -82,6 +82,8 @@ def x(sql, params=(), devolver_id=False):
 
 def _schema():
     """Esquema de la empresa abierta. Castillo de Oro usa 'public' (sus datos originales)."""
+    if not st.session_state.get("empresa"):
+        return "public"
     return st.session_state.get("esquema") or "public"
 
 
@@ -168,8 +170,12 @@ def ahora():
 
 
 def registrar(accion, detalle):
-    x("INSERT INTO actividad (momento, usuario, accion, detalle) VALUES (?,?,?,?)",
-      (ahora(), st.session_state.get("usuario"), accion, detalle))
+    """Registro de actividad. Nunca debe romper la app (por ejemplo, al salir)."""
+    try:
+        x("INSERT INTO actividad (momento, usuario, accion, detalle) VALUES (?,?,?,?)",
+          (ahora(), st.session_state.get("usuario"), accion, detalle))
+    except Exception:
+        pass
 
 
 # ======================= UTILIDADES =======================
