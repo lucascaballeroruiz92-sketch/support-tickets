@@ -1324,7 +1324,9 @@ header[data-testid="stHeader"] { background: transparent !important; }
 .login-titulo h1 { font-size: 4.2rem; font-weight: 900; color: #FFFFFF; text-shadow: 0 4px 14px rgba(90,40,120,.45); margin: 0; letter-spacing: 1px; }
 .login-titulo p { font-size: 1.3rem; font-weight: 700; color: #FFFFFF; text-shadow: 0 2px 8px rgba(90,40,120,.4); margin-top: 6px; }
 [data-testid="stForm"] { background: rgba(255,255,255,.94); border-radius: 26px; padding: 28px; border: none !important; box-shadow: 0 12px 30px rgba(90,40,120,.2); }
-[data-testid="stForm"] button { background: linear-gradient(90deg, #FF8FAB, #B9A3F0) !important; border: none !important; color: #FFFFFF !important; font-weight: 800 !important; font-size: 1.1rem !important; width: 100%; border-radius: 14px !important; }
+[data-testid="stFormSubmitButton"] button { background: linear-gradient(90deg, #FF8FAB, #B9A3F0) !important; border: none !important; color: #FFFFFF !important; font-weight: 800 !important; font-size: 1.1rem !important; width: 100%; border-radius: 14px !important; }
+[data-testid="stForm"] [data-baseweb="select"] > div { background: #FFFFFF !important; color: #3B2A5A !important; border-radius: 12px !important; }
+[data-testid="stForm"] [data-baseweb="select"] span, [data-testid="stForm"] [data-baseweb="select"] svg { color: #3B2A5A !important; fill: #3B2A5A !important; }
 .st-key-emp_busq { background: rgba(255,255,255,.94); border-radius: 22px; padding: 18px 22px; box-shadow: 0 10px 24px rgba(90,40,120,.18); margin-bottom: 24px; }
 [class*="st-key-emp_"] button { min-height: 130px !important; background: #FFFFFF !important; border: 3px solid #F9A8D4 !important; border-radius: 22px !important; font-size: 1.8rem !important; font-weight: 800 !important; color: #5B3A8C !important; box-shadow: 0 8px 20px rgba(90,40,120,.15) !important; }
 [class*="st-key-emp_"] button p { color: #5B3A8C !important; font-size: 1.8rem !important; font-weight: 800 !important; }
