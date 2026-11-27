@@ -160,7 +160,7 @@ def eliminar_empresa(nombre):
         else:
             con.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{esq}" CASCADE')
         con.exec_driver_sql("DELETE FROM public.empresas WHERE id = %s", (eid,))
-    return True, f"Empresa {nombre} eliminada.""
+    return True, f"Empresa {nombre} eliminada."
 
 
 def ahora():
