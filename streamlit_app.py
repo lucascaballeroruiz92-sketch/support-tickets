@@ -1389,7 +1389,7 @@ SUBS = {
     "ventas": ["Facturas", "Notas de crédito", "Notas de débito", "Reportes"],
     "tesoreria": ["Carga de liquidación", "Vinculación de comprobantes", "Planilla Excel"],
     "contabilidad": ["Impuestos para declaración jurada", "Resumen por plataforma"],
-    "config": ["Reiniciar datos de prueba"],
+    "config": ["Reiniciar datos de prueba", "Eliminar empresa"],
 }
 REPORTES_VENTAS = ["Facturas impagas"]
 ESTILO = """
@@ -1460,7 +1460,7 @@ def menu_subs(mod):
 
 
 def eliminar_empresa_ui():
-    st.subheader("Eliminar empresas")
+    st.subheader("Eliminar empresa")
     st.caption("Borra la empresa con todos sus comprobantes, liquidaciones, extractos y actividad. No se puede deshacer.")
     if st.session_state.get("msg_emp"):
         st.success(st.session_state.pop("msg_emp"))
@@ -1487,8 +1487,7 @@ def configuracion():
         borrar_todos_los_datos()
         st.session_state.pop("resultado_conc", None)
         st.rerun()
-    st.divider()
-    eliminar_empresa_ui()
+
 
 
 # ======================= BARRA LATERAL =======================
@@ -1553,6 +1552,9 @@ else:
         vista_contabilidad(sub)
     elif mod == "config":
         if usuario == ADMIN:
-            configuracion()
+            if sub == "Eliminar empresa":
+                eliminar_empresa_ui()
+            else:
+                configuracion()
         else:
             st.info("Solo el administrador puede acceder a la configuración.")
